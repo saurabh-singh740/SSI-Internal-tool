@@ -1,4 +1,4 @@
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import rateLimit from 'express-rate-limit';
 import { AuthRequest } from './auth.middleware';
 
 // ── Auth rate limiter ─────────────────────────────────────────────────────────
@@ -41,8 +41,12 @@ export const perUserWriteLimiter = rateLimit({
   max: process.env.NODE_ENV === 'production' ? 30 : 1000,
   keyGenerator: (req) => {
     const authReq = req as AuthRequest;
-    return authReq.user?.id ?? ipKeyGenerator(req);
+    if (authReq.user?.id) return authReq.user.id;
+    // Normalize IPv6-mapped IPv4 (e.g. ::ffff:1.2.3.4 → 1.2.3.4)
+    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    return ip.replace(/^::ffff:/, '');
   },
+  validate: { xForwardedForHeader: false },
   standardHeaders: true,
   legacyHeaders:   false,
   message: { message: 'Too many write requests. Please slow down.' },
