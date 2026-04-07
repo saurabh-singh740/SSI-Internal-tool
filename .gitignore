@@ -17,3 +17,6 @@ frontend/dist/
 # Stray root-level build artifacts
 /public/
 /vercel.json
+
+# Frontend — tracked in its own repo
+frontend/
