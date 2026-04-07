@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+uploads/
+logs/
+*.log
+
+# Frontend build output — generated at deploy time by Vite
+backend/public/
+
+# Local frontend dist
+frontend/dist/
+
+# Stray root-level build artifacts
+/public/
+/vercel.json

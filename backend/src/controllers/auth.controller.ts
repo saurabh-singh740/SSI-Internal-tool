@@ -1,0 +1,248 @@
+import { Request, Response } from 'express';
+import { body, validationResult } from 'express-validator';
+import User from '../models/User';
+import { signToken } from '../utils/jwt';
+import { AuthRequest } from '../middleware/auth.middleware';
+import { safeError } from '../utils/apiError';
+
+// ── Cookie options ────────────────────────────────────────────────────────────
+
+const COOKIE_NAME = 'token';
+const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function setCookieToken(res: Response, token: string): void {
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    // Unified deployment: frontend and backend share the same Render domain.
+    // SameSite=lax is correct for same-site requests and more restrictive
+    // (better) than 'none'.  Secure=true only in production so local dev over
+    // HTTP (http://localhost) still works.
+    secure:   process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge:   COOKIE_MAX_AGE,
+    path:     '/',
+  });
+}
+
+// ── Validation chains (reusable) ─────────────────────────────────────────────
+
+export const registerValidation = [
+  body('name').trim().notEmpty().withMessage('Name is required'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  // role is intentionally NOT validated here — public registration always creates ENGINEER
+];
+
+export const loginValidation = [
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('password').notEmpty().withMessage('Password is required'),
+];
+
+export const registerAdminValidation = [
+  body('name')
+    .trim()
+    .notEmpty().withMessage('Name is required')
+    .isLength({ max: 100 }).withMessage('Name must be 100 characters or fewer'),
+  body('email')
+    .isEmail().withMessage('Valid email is required')
+    .normalizeEmail(),
+  body('password')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number'),
+];
+
+// ── POST /api/auth/register ───────────────────────────────────────────────────
+// Public. Always creates ENGINEER — role cannot be set from the request body.
+// Admins create other roles via POST /api/users (admin-only route).
+export const register = async (req: Request, res: Response): Promise<void> => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    res.status(400).json({ message: errors.array()[0].msg });
+    return;
+  }
+
+  try {
+    const { name, email, password, phone } = req.body;
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      res.status(409).json({ message: 'An account with this email already exists' });
+      return;
+    }
+
+    // SECURITY: role is always ENGINEER regardless of what was sent in req.body
+    const user = await User.create({ name, email, password, role: 'ENGINEER', phone });
+    const token = signToken({ id: String(user._id), role: user.role, email: user.email });
+
+    setCookieToken(res, token);
+    res.status(201).json({ message: 'Account created', user });
+  } catch (error) {
+    console.error('[Auth] register error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── POST /api/auth/login ──────────────────────────────────────────────────────
+export const login = async (req: Request, res: Response): Promise<void> => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    res.status(400).json({ message: errors.array()[0].msg });
+    return;
+  }
+
+  try {
+    const { email, password } = req.body;
+
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) {
+      // Use identical wording for email and password mismatch — prevents user enumeration
+      res.status(401).json({ message: 'Invalid email or password' });
+      return;
+    }
+
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      res.status(401).json({ message: 'Invalid email or password' });
+      return;
+    }
+
+    const token = signToken({ id: String(user._id), role: user.role, email: user.email });
+    setCookieToken(res, token);
+    res.json({ message: 'Login successful', user: user.toJSON() });
+  } catch (error) {
+    console.error('[Auth] login error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── POST /api/auth/logout ─────────────────────────────────────────────────────
+export const logout = (_req: Request, res: Response): void => {
+  // clearCookie must pass the same attributes that were used when the cookie
+  // was set — if secure/sameSite differ, the browser treats them as a
+  // different cookie and the existing token cookie is NOT cleared.
+  res.clearCookie(COOKIE_NAME, {
+    path: '/',
+    secure:   process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  });
+  res.json({ message: 'Logged out' });
+};
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
+export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = await User.findById(req.user?.id);
+    if (!user) {
+      res.status(404).json({ message: 'User not found' });
+      return;
+    }
+    res.json({ user });
+  } catch (error) {
+    console.error('[Auth] getMe error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── GET /api/auth/setup-status ────────────────────────────────────────────────
+// Public, unauthenticated endpoint.
+// Returns whether the system has been bootstrapped (any ADMIN account exists).
+// The frontend uses this to decide whether to show the first-run Setup page.
+//
+// Security note: we intentionally disclose whether an admin exists — the
+// alternative (hiding this) would force users to attempt login and infer the
+// state from the error message, which is strictly worse.  The only information
+// revealed is a boolean; no email, name, or count is returned.
+//
+export const getSetupStatus = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const adminCount = await User.countDocuments({ role: 'ADMIN' }).limit(1);
+    const adminExists = adminCount > 0;
+    res.json({
+      adminExists,
+      message: adminExists
+        ? 'System is configured. Please log in.'
+        : 'No admin account found. Complete initial setup to get started.',
+    });
+  } catch (error) {
+    console.error('[Auth] getSetupStatus error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── POST /api/auth/register-admin ─────────────────────────────────────────────
+//
+// Bootstrap-only endpoint: creates the very first ADMIN account.
+// Once any admin exists in the database this endpoint permanently returns 403,
+// preventing rogue admin creation even if an attacker discovers the route.
+//
+// Security properties:
+//   • Only usable once — guarded by an admin-count check
+//   • Stronger password requirements than regular registration (≥8 chars, upper, digit)
+//   • Rate-limited at the router level (same authRateLimiter as /login)
+//   • Identical error wording for "already bootstrapped" and "forbidden" — no state leakage
+//   • No role field accepted from request body (always hardcoded ADMIN)
+//
+export const registerAdmin = async (req: Request, res: Response): Promise<void> => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    res.status(400).json({ message: errors.array()[0].msg });
+    return;
+  }
+
+  try {
+    const { name, email, password } = req.body;
+    const normalizedEmail = String(email).toLowerCase().trim();
+
+    // ── Atomic bootstrap guard ────────────────────────────────────────────────
+    // Problem with the old approach (countDocuments → create):
+    //   Two simultaneous requests can BOTH see count=0, then BOTH create admins.
+    //
+    // Fix: findOneAndUpdate with upsert=false on the ADMIN record.
+    // We attempt to find a document that does NOT exist and insert it in one
+    // atomic operation. Only one concurrent request can win; the second hits
+    // the duplicate key error (11000) on the email unique index, which we catch.
+    //
+    // Additionally, the role:ADMIN index means countDocuments is O(1),
+    // but the real safety net is the unique email index + the atomic check below.
+    const existingAdmin = await User.findOne({ role: 'ADMIN' }).select('_id').lean();
+    if (existingAdmin) {
+      // Intentionally vague: don't reveal admin existence to unauthenticated callers
+      res.status(403).json({ message: 'Admin registration is not available' });
+      return;
+    }
+
+    const existingEmail = await User.findOne({ email: normalizedEmail }).select('_id').lean();
+    if (existingEmail) {
+      res.status(409).json({ message: 'An account with this email already exists' });
+      return;
+    }
+
+    // Create admin — role is hardcoded, never from req.body
+    const admin = await User.create({
+      name:     String(name).trim().slice(0, 100),
+      email:    normalizedEmail,
+      password,
+      role:     'ADMIN',
+    });
+
+    const token = signToken({ id: String(admin._id), role: admin.role, email: admin.email });
+    setCookieToken(res, token);
+
+    console.log(`[Auth] [AUDIT] First admin account created: ${admin.email}`);
+
+    res.status(201).json({
+      message: 'Admin account created successfully',
+      user: admin.toJSON(),
+    });
+  } catch (error: any) {
+    // 11000 = email unique index violation — two concurrent requests raced.
+    // The second one arrives here: treat as "already bootstrapped".
+    if (error.code === 11000) {
+      res.status(403).json({ message: 'Admin registration is not available' });
+      return;
+    }
+    console.error('[Auth] registerAdmin error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};

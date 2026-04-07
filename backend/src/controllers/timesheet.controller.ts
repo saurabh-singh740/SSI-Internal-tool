@@ -1,0 +1,403 @@
+import { Response } from 'express';
+import mongoose from 'mongoose';
+import Timesheet from '../models/Timesheet';
+import Project from '../models/Project';
+import Notification from '../models/Notification';
+import { AuthRequest } from '../middleware/auth.middleware';
+import { generateYearSheets, recalculateMonthTotals, recalculateAuthorizedHours } from '../utils/timesheetGenerator';
+import { safeError } from '../utils/apiError';
+
+function isValidObjectId(id: string): boolean {
+  return mongoose.Types.ObjectId.isValid(id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/timesheets/:projectId/:engineerId/:year
+// Returns METADATA only (month list with totals + lock status, NO entries).
+// The full entries for each month are fetched on demand via getMonthSheet.
+//
+// Payload before: ~200KB (12 months × 31 entries × 8 fields)
+// Payload after:  ~2KB   (12 month summaries, no entries)
+// ─────────────────────────────────────────────────────────────────────────────
+export const getOrGenerateTimesheet = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId, engineerId, year: yearStr } = req.params;
+    const year = parseInt(yearStr, 10);
+
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      res.status(400).json({ message: 'Invalid year' }); return;
+    }
+    if (!isValidObjectId(projectId) || !isValidObjectId(engineerId)) {
+      res.status(400).json({ message: 'Invalid projectId or engineerId' }); return;
+    }
+
+    const project = await Project.findById(projectId)
+      .select('contractedHours additionalApprovedHours canViewTimesheets engineersCanEditTimesheets startDate endDate')
+      .lean();
+    if (!project) { res.status(404).json({ message: 'Project not found' }); return; }
+
+    if (req.user?.role === 'ENGINEER' && req.user.id !== engineerId) {
+      res.status(403).json({ message: 'Access denied' }); return;
+    }
+    if (req.user?.role === 'CUSTOMER' && !project.canViewTimesheets) {
+      res.status(403).json({ message: 'Timesheet access not enabled for this project' }); return;
+    }
+
+    let timesheet = await Timesheet.findOne({ project: projectId, engineer: engineerId, year })
+      .select('project engineer year months.monthIndex months.monthName months.monthlyTotal months.isLocked months.weeklyTotals months.authorizedHoursUsedUpToMonth months.authorizedHoursRemainingAfterMonth months.lockedAt months.lockedBy')
+      .lean();
+
+    if (!timesheet) {
+      const totalAuthorizedHours = (project as any).contractedHours + (project as any).additionalApprovedHours;
+      const months = generateYearSheets(year, totalAuthorizedHours);
+      const created = await Timesheet.create({ project: projectId, engineer: engineerId, year, months });
+      // Return metadata only from newly created doc
+      timesheet = await Timesheet.findById(created._id)
+        .select('project engineer year months.monthIndex months.monthName months.monthlyTotal months.isLocked months.weeklyTotals months.authorizedHoursUsedUpToMonth months.authorizedHoursRemainingAfterMonth months.lockedAt months.lockedBy')
+        .lean();
+    }
+
+    res.json({ timesheet });
+  } catch (err: unknown) {
+    console.error('[Timesheet] getOrGenerate error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/timesheets/:projectId/:engineerId/:year/:monthIndex
+// Returns a SINGLE month with full entries. Called lazily when user opens a tab.
+//
+// Uses MongoDB $elemMatch projection — only the matching month subdocument
+// is transmitted over the wire. MongoDB does NOT load other months into memory.
+// ─────────────────────────────────────────────────────────────────────────────
+export const getMonthSheet = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId, engineerId, year: yearStr, monthIndex: monthStr } = req.params;
+    const year       = parseInt(yearStr, 10);
+    const monthIndex = parseInt(monthStr, 10);
+
+    if (isNaN(year)       || year < 2000 || year > 2100)  { res.status(400).json({ message: 'Invalid year' }); return; }
+    if (isNaN(monthIndex) || monthIndex < 0 || monthIndex > 11) { res.status(400).json({ message: 'monthIndex must be 0–11' }); return; }
+    if (!isValidObjectId(projectId) || !isValidObjectId(engineerId)) {
+      res.status(400).json({ message: 'Invalid projectId or engineerId' }); return;
+    }
+
+    if (req.user?.role === 'ENGINEER' && req.user.id !== engineerId) {
+      res.status(403).json({ message: 'Access denied' }); return;
+    }
+
+    // $elemMatch projection: MongoDB returns only the matching month subdoc.
+    // This is far more efficient than loading the full document and slicing in JS.
+    const timesheet = await Timesheet.findOne(
+      { project: projectId, engineer: engineerId, year },
+      { months: { $elemMatch: { monthIndex } } }
+    ).lean();
+
+    if (!timesheet) { res.status(404).json({ message: 'Timesheet not found' }); return; }
+
+    const month = (timesheet.months as any[])?.[0] ?? null;
+    if (!month)    { res.status(404).json({ message: `Month ${monthIndex} not found in timesheet` }); return; }
+
+    res.json({ month });
+  } catch (err: unknown) {
+    console.error('[Timesheet] getMonthSheet error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/timesheets/engineer/:engineerId/:year
+// Batch endpoint — returns all project timesheets for an engineer in one query.
+// Replaces N+1 pattern in EngineerDashboard and WorkSummary.
+// ─────────────────────────────────────────────────────────────────────────────
+export const getEngineerTimesheets = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { engineerId, year: yearStr } = req.params;
+    const year = parseInt(yearStr, 10);
+
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      res.status(400).json({ message: 'Invalid year' }); return;
+    }
+    if (!isValidObjectId(engineerId)) {
+      res.status(400).json({ message: 'Invalid engineerId' }); return;
+    }
+
+    // Engineers can only fetch their own; admins can fetch anyone
+    if (req.user?.role === 'ENGINEER' && req.user.id !== engineerId) {
+      res.status(403).json({ message: 'Access denied' }); return;
+    }
+
+    const timesheets = await Timesheet.find({ engineer: engineerId, year })
+      .populate('project', 'name code clientName totalAuthorizedHours hoursUsed status engineers')
+      .select('project year months.monthIndex months.monthName months.monthlyTotal months.isLocked months.weeklyTotals months.authorizedHoursRemainingAfterMonth');
+
+    res.json({ timesheets });
+  } catch (err: unknown) {
+    console.error('[Timesheet] getEngineerTimesheets error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /api/timesheets/:projectId/:engineerId/:year/:monthIndex/entries/:entryId
+// ─────────────────────────────────────────────────────────────────────────────
+export const updateEntry = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId, engineerId, year: yearStr, monthIndex: monthStr, entryId } = req.params;
+    const year       = parseInt(yearStr,  10);
+    const monthIndex = parseInt(monthStr, 10);
+
+    if (!isValidObjectId(projectId) || !isValidObjectId(engineerId)) {
+      res.status(400).json({ message: 'Invalid projectId or engineerId' }); return;
+    }
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      res.status(400).json({ message: 'Invalid year' }); return;
+    }
+    if (isNaN(monthIndex) || monthIndex < 0 || monthIndex > 11) {
+      res.status(400).json({ message: 'monthIndex must be between 0 and 11' }); return;
+    }
+
+    if (req.user?.role === 'ENGINEER' && req.user.id !== engineerId) {
+      res.status(403).json({ message: 'Access denied' }); return;
+    }
+    if (req.user?.role === 'CUSTOMER') {
+      res.status(403).json({ message: 'Customers cannot edit timesheets' }); return;
+    }
+
+    const timesheet = await Timesheet.findOne({ project: projectId, engineer: engineerId, year });
+    if (!timesheet) { res.status(404).json({ message: 'Timesheet not found' }); return; }
+
+    const month = timesheet.months.find(m => m.monthIndex === monthIndex);
+    if (!month) { res.status(404).json({ message: 'Month not found' }); return; }
+
+    if (month.isLocked) {
+      res.status(400).json({ message: 'This month is locked and cannot be edited' }); return;
+    }
+
+    const project = await Project.findById(projectId);
+    if (project && !project.engineersCanEditTimesheets && req.user?.role === 'ENGINEER') {
+      res.status(403).json({ message: 'Timesheet editing is disabled for this project' }); return;
+    }
+
+    const entry = month.entries.find((e: any) => String(e._id) === entryId);
+    if (!entry) { res.status(404).json({ message: 'Entry not found' }); return; }
+
+    // Enforce project date range — compare YYYY-MM-DD strings in UTC to avoid
+    // any local-timezone shift between entry dates and project boundary dates.
+    if (project) {
+      const entryDay = new Date(entry.date as any).toISOString().slice(0, 10);
+
+      if (project.startDate) {
+        const startDay = new Date(project.startDate).toISOString().slice(0, 10);
+        if (entryDay < startDay) {
+          res.status(400).json({
+            message: `This date is before the project start date (${startDay}). Timesheet entries are not allowed before the project begins.`,
+          });
+          return;
+        }
+      }
+
+      if (project.endDate) {
+        const endDay = new Date(project.endDate).toISOString().slice(0, 10);
+        if (entryDay > endDay) {
+          res.status(400).json({
+            message: `This date is after the project end date (${endDay}). Timesheet entries are not allowed after the project ends.`,
+          });
+          return;
+        }
+      }
+    }
+
+    // Validated field updates
+    const { projectWork, hours, minutes, remarks } = req.body;
+    if (projectWork !== undefined) entry.projectWork = String(projectWork).slice(0, 500);
+    if (hours       !== undefined) entry.hours       = Math.max(0, Math.min(23, Number(hours)));
+    if (minutes     !== undefined) entry.minutes     = Math.max(0, Math.min(59, Number(minutes)));
+    if (remarks     !== undefined) entry.remarks     = String(remarks).slice(0, 500);
+
+    recalculateMonthTotals(month);
+
+    const totalAuthorizedHours = project
+      ? project.contractedHours + project.additionalApprovedHours
+      : 0;
+    recalculateAuthorizedHours(timesheet.months, totalAuthorizedHours);
+
+    const totalUsed = timesheet.months.reduce((s, m) => s + m.monthlyTotal, 0);
+    if (project) {
+      project.hoursUsed = Math.round(totalUsed * 100) / 100;
+      await project.save();
+    }
+
+    await timesheet.save();
+    res.json({ month, hoursUsed: project?.hoursUsed });
+  } catch (err: unknown) {
+    console.error('[Timesheet] updateEntry error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /api/timesheets/:projectId/:engineerId/:year/:monthIndex/lock
+// Admin locks or unlocks a month. Creates a notification for the engineer.
+// ─────────────────────────────────────────────────────────────────────────────
+export const lockMonth = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId, engineerId, year: yearStr, monthIndex: monthStr } = req.params;
+    const year       = parseInt(yearStr,  10);
+    const monthIndex = parseInt(monthStr, 10);
+    const { lock }   = req.body;
+
+    const timesheet = await Timesheet.findOne({ project: projectId, engineer: engineerId, year });
+    if (!timesheet) { res.status(404).json({ message: 'Timesheet not found' }); return; }
+
+    const month = timesheet.months.find(m => m.monthIndex === monthIndex);
+    if (!month) { res.status(404).json({ message: 'Month not found' }); return; }
+
+    month.isLocked = !!lock;
+    month.lockedAt = lock ? new Date() : undefined;
+    month.lockedBy = lock ? new mongoose.Types.ObjectId(req.user!.id) : undefined;
+
+    await timesheet.save();
+
+    // Notify the engineer when their month is locked
+    if (lock) {
+      await Notification.create({
+        user:    engineerId,
+        project: projectId,
+        type:    'TIMESHEET_SUBMITTED',
+        message: `Your timesheet for ${month.monthName} ${year} has been locked by admin.`,
+      });
+    }
+
+    res.json({ message: lock ? 'Month locked' : 'Month unlocked', monthIndex, isLocked: month.isLocked });
+  } catch (err: unknown) {
+    console.error('[Timesheet] lockMonth error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/timesheets/generate
+// Admin manually generates / re-generates a timesheet.
+// Refuses to overwrite an existing timesheet that has logged hours unless
+// { force: true } is passed in the body.
+// ─────────────────────────────────────────────────────────────────────────────
+export const generateTimesheet = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId, engineerId, year: yearParam, force = false } = req.body;
+    if (!projectId || !engineerId) {
+      res.status(400).json({ message: 'projectId and engineerId are required' }); return;
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) { res.status(404).json({ message: 'Project not found' }); return; }
+
+    const year = yearParam
+      ? parseInt(yearParam, 10)
+      : (project.startDate ? new Date(project.startDate).getFullYear() : new Date().getFullYear());
+
+    // Guard — do not silently destroy existing data
+    const existing = await Timesheet.findOne({ project: projectId, engineer: engineerId, year });
+    const hasLoggedHours = existing?.months.some(m => m.monthlyTotal > 0);
+    if (existing && hasLoggedHours && !force) {
+      res.status(409).json({
+        message: 'This timesheet already has logged hours. Pass force:true to overwrite (destructive).',
+        hasLoggedHours: true,
+      });
+      return;
+    }
+
+    const totalAuthorizedHours = project.contractedHours + project.additionalApprovedHours;
+    const months = generateYearSheets(year, totalAuthorizedHours);
+
+    const timesheet = await Timesheet.findOneAndUpdate(
+      { project: projectId, engineer: engineerId, year },
+      { project: projectId, engineer: engineerId, year, months },
+      { upsert: true, new: true },
+    );
+
+    res.status(201).json({ message: 'Timesheet generated', timesheet });
+  } catch (err: unknown) {
+    console.error('[Timesheet] generate error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/timesheets/rebuild-structure
+// Admin: rebuild calendar skeleton using cursor iteration (memory-safe).
+// ─────────────────────────────────────────────────────────────────────────────
+export const rebuildAllStructure = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    let rebuilt = 0;
+
+    // Use .cursor() to iterate one document at a time — avoids loading all
+    // timesheets into memory simultaneously (N × 12 months × ~31 entries each)
+    const cursor = Timesheet.find({}).cursor();
+
+    for await (const ts of cursor) {
+      const project = await Project.findById(ts.project);
+      const totalAuthorizedHours = project
+        ? project.contractedHours + project.additionalApprovedHours
+        : 0;
+
+      const freshMonths = generateYearSheets(ts.year, totalAuthorizedHours);
+
+      for (const freshMonth of freshMonths) {
+        const oldMonth = ts.months.find(m => m.monthIndex === freshMonth.monthIndex);
+        if (!oldMonth) continue;
+
+        for (const freshEntry of freshMonth.entries) {
+          const oldEntry = oldMonth.entries.find((e: any) => e.sno === freshEntry.sno);
+          if (oldEntry) {
+            freshEntry.projectWork = (oldEntry as any).projectWork || '';
+            freshEntry.hours       = (oldEntry as any).hours       || 0;
+            freshEntry.minutes     = (oldEntry as any).minutes     || 0;
+            freshEntry.remarks     = (oldEntry as any).remarks     || '';
+            freshEntry.totalHours  = Math.round((freshEntry.hours + freshEntry.minutes / 60) * 100) / 100;
+          }
+        }
+
+        recalculateMonthTotals(freshMonth);
+        freshMonth.isLocked = oldMonth.isLocked;
+        freshMonth.lockedAt = oldMonth.lockedAt;
+        freshMonth.lockedBy = oldMonth.lockedBy;
+      }
+
+      recalculateAuthorizedHours(freshMonths, totalAuthorizedHours);
+      await Timesheet.updateOne({ _id: ts._id }, { $set: { months: freshMonths } });
+      rebuilt++;
+    }
+
+    res.json({ message: `Rebuilt ${rebuilt} timesheet(s) with correct calendar structure` });
+  } catch (err: unknown) {
+    console.error('[Timesheet] rebuildAllStructure error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/timesheets/project/:projectId  — admin: all engineers for a project
+// ─────────────────────────────────────────────────────────────────────────────
+export const getProjectTimesheets = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { projectId } = req.params;
+    if (!isValidObjectId(projectId)) {
+      res.status(400).json({ message: 'Invalid projectId' }); return;
+    }
+    const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      res.status(400).json({ message: 'Invalid year' }); return;
+    }
+
+    const timesheets = await Timesheet.find({ project: projectId, year })
+      .populate('engineer', 'name email')
+      .select('engineer year months.monthName months.monthlyTotal months.isLocked months.monthIndex');
+
+    res.json({ timesheets });
+  } catch (err: unknown) {
+    console.error('[Timesheet] getProjectTimesheets error:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
