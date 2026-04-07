@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cohort Admin – Project Platform</title>
+
+    <!-- Theme color matches the app background so the browser chrome blends in
+         on mobile and avoids a white flash while the JS bundle loads. -->
+    <meta name="theme-color" content="#050816" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+
+    <!-- DNS prefetch + preconnect for the API origin.
+         This resolves the hostname and negotiates TLS before the first fetch,
+         shaving ~100-300 ms off LCP on cold loads. -->
+    <link rel="dns-prefetch" href="http://localhost:5002" />
+    <link rel="preconnect" href="http://localhost:5002" />
+
+    <!-- Inline critical styles: paint the background and centered skeleton
+         immediately, before any CSS bundle arrives.  Prevents the white flash
+         and reduces CLS on the initial load. -->
+    <style>
+      *,::before,::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; background: #050816; }
+      #root { height: 100%; }
+
+      /* Shown only while the React bundle is still downloading */
+      #app-loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        background: #050816;
+      }
+      #app-loading-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #6366f1, #7c3aed);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      #app-loading-bar {
+        width: 96px;
+        height: 6px;
+        border-radius: 999px;
+        background: rgba(99, 102, 241, 0.25);
+        overflow: hidden;
+      }
+      #app-loading-bar::after {
+        content: '';
+        display: block;
+        height: 100%;
+        width: 40%;
+        border-radius: 999px;
+        background: rgba(99, 102, 241, 0.7);
+        animation: slide 1.4s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.5; }
+      }
+      @keyframes slide {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(340%); }
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-D2bLIHB7.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-BVy_Vjsq.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-query-npk8j9gA.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-pdf-B6slB5rm.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-ui-BTeybfc8.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-rMf0CCxD.css">
+  </head>
+  <body>
+    <!-- Inline loading indicator — visible before React hydrates.
+         React mounts into #root and this sibling is never shown again. -->
+    <div id="app-loading" aria-hidden="true">
+      <div id="app-loading-icon"></div>
+      <div id="app-loading-bar"></div>
+    </div>
+
+    <div id="root"></div>
+
+    <script>
+      // Hide the loading indicator the moment React starts rendering.
+      document.addEventListener('DOMContentLoaded', function () {
+        var el = document.getElementById('app-loading');
+        if (el) el.style.display = 'none';
+      });
+    </script>
+  </body>
+</html>

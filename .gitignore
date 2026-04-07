@@ -8,8 +8,7 @@ uploads/
 logs/
 *.log
 
-# Frontend build output — generated at deploy time by Vite
-backend/public/
+# backend/public/ is committed — pre-built frontend assets served by Express
 
 # Local frontend dist
 frontend/dist/
