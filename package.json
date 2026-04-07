@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "cd frontend && npm install && npm run build && cd .. && rm -rf backend/public && cp -r frontend/dist backend/public && cd backend && npm install && npm run build",
+    "build": "cd backend && npm install && npm run build",
     "start": "node backend/dist/index.js"
   }
 }
