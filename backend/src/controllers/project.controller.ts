@@ -24,6 +24,7 @@ function escapeRegex(s: string): string {
  */
 const PROJECT_WRITABLE_FIELDS = [
   'name', 'code', 'type', 'category', 'status', 'description',
+  'sourceType', 'sourceName',
   'clientName', 'clientCompany', 'clientEmail', 'clientPhone',
   'startDate', 'endDate', 'estimatedCompletionDate', 'phase',
   'contractedHours', 'additionalApprovedHours', 'hourlyRate', 'currency',

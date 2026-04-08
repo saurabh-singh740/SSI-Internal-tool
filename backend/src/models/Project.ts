@@ -2,6 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export type ProjectType = 'INTERNAL' | 'CLIENT_PROJECT' | 'SUPPORT';
 export type ProjectStatus = 'ACTIVE' | 'CLOSED' | 'ON_HOLD';
+export type ProjectSourceType = 'DIRECT' | 'PARTNER' | 'REFERRAL' | 'OTHER';
 export type ProjectPhase = 'PLANNING' | 'EXECUTION' | 'DELIVERY' | 'MAINTENANCE';
 export type Currency = 'USD' | 'INR' | 'EUR';
 export type BillingType = 'TIME_AND_MATERIAL' | 'FIXED_PRICE' | 'MILESTONE';
@@ -42,6 +43,10 @@ export interface IProject extends Document {
   category?: string;
   status: ProjectStatus;
   description?: string;
+
+  // Source Info
+  sourceType?: ProjectSourceType;
+  sourceName?: string;
 
   // Client Info
   clientName?: string;
@@ -138,6 +143,9 @@ const ProjectSchema = new Schema<IProject>(
     category: { type: String },
     status: { type: String, enum: ['ACTIVE', 'CLOSED', 'ON_HOLD'], default: 'ACTIVE' },
     description: { type: String },
+
+    sourceType: { type: String, enum: ['DIRECT', 'PARTNER', 'REFERRAL', 'OTHER'] },
+    sourceName: { type: String },
 
     clientName: { type: String },
     clientCompany: { type: String },
