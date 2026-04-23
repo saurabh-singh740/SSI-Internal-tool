@@ -107,6 +107,10 @@ export interface IProject extends Document {
   // Metrics (computed)
   hoursUsed: number;
 
+  // Set only when this project was created via Deal → Project conversion.
+  // Undefined for all manually-created projects.
+  originDealId?: mongoose.Types.ObjectId;
+
   createdBy: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -205,8 +209,9 @@ const ProjectSchema = new Schema<IProject>(
     attachments: [AttachmentSchema],
     notes: { type: String },
 
-    hoursUsed: { type: Number, default: 0 },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    hoursUsed:    { type: Number, default: 0 },
+    originDealId: { type: Schema.Types.ObjectId, ref: 'Deal' },
+    createdBy:    { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
   { timestamps: true }
 );

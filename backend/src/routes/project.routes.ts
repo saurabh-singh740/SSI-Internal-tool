@@ -12,7 +12,7 @@ import {
   getProjectMetrics,
   getProjectStats,
 } from '../controllers/project.controller';
-import { assignEngineer, confirmInvite } from '../controllers/engineer.controller';
+import { assignEngineer, confirmInvite, addEngineerToProject, removeEngineerFromProject } from '../controllers/engineer.controller';
 import { protect, requireRole } from '../middleware/auth.middleware';
 import { perUserWriteLimiter } from '../middleware/rateLimiters';
 import Project from '../models/Project';
@@ -74,6 +74,10 @@ router.post('/cleanup/null-engineers', requireRole('ADMIN'), async (_req, res: R
 // Engineer assignment + invite confirmation
 router.post('/assign-engineer', requireRole('ADMIN'), assignEngineer);
 router.get('/invite/:token', confirmInvite);
+
+// Inline engineer management on ViewProject (no full-form edit needed)
+router.post(  '/:id/engineers',              requireRole('ADMIN'), perUserWriteLimiter, addEngineerToProject);
+router.delete('/:id/engineers/:engineerId',  requireRole('ADMIN'), removeEngineerFromProject);
 
 // CRUD
 router.get('/',    getProjects);

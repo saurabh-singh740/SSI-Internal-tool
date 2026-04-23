@@ -22,6 +22,9 @@ import userRoutes         from './routes/user.routes';
 import timesheetRoutes    from './routes/timesheet.routes';
 import notificationRoutes from './routes/notification.routes';
 import paymentRoutes      from './routes/payment.routes';
+import dealRoutes         from './modules/presales/routes/deal.routes';
+import partnerRoutes      from './modules/presales/routes/partner.routes';
+import attachmentRoutes   from './modules/presales/routes/attachment.routes';
 import { testEmail }      from './controllers/engineer.controller';
 import { protect, requireRole } from './middleware/auth.middleware';
 import { globalErrorHandler }   from './middleware/errorHandler';
@@ -118,6 +121,9 @@ app.use('/api/users',         userRoutes);
 app.use('/api/timesheets',    timesheetRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/payments',      paymentRoutes);
+app.use('/api/deals',                  dealRoutes);
+app.use('/api/deals/:id/attachments',  attachmentRoutes);
+app.use('/api/partners',               partnerRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_req: Request, res: Response) => {

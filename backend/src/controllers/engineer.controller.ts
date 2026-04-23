@@ -87,6 +87,84 @@ export const assignEngineer = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
+// ── POST /api/projects/:id/engineers — add by userId ─────────────────────────
+export const addEngineerToProject = async (req: AuthRequest, res: Response): Promise<void> => {
+  const { engineerId, role = 'ENGINEER', allocationPercentage = 100, startDate, endDate } = req.body;
+
+  if (!engineerId) {
+    res.status(400).json({ message: 'engineerId is required' });
+    return;
+  }
+
+  try {
+    const project = await Project.findById(req.params.id)
+      .select('name code status engineers startDate contractedHours additionalApprovedHours clientName');
+    if (!project) { res.status(404).json({ message: 'Project not found' }); return; }
+    if (project.status === 'CLOSED') {
+      res.status(400).json({ message: 'Cannot assign engineers to a closed project' }); return;
+    }
+
+    const engineer = await User.findById(engineerId).select('_id name email').lean();
+    if (!engineer) { res.status(404).json({ message: 'User not found' }); return; }
+
+    const alreadyAssigned = project.engineers.some(e => String(e.engineer) === String(engineer._id));
+
+    if (!alreadyAssigned) {
+      project.engineers.push({
+        engineer:             engineer._id as any,
+        role,
+        allocationPercentage: Number(allocationPercentage),
+        startDate:            startDate ? new Date(startDate) : undefined,
+        endDate:              endDate   ? new Date(endDate)   : undefined,
+      } as any);
+      await project.save();
+    }
+
+    const year = project.startDate ? new Date(project.startDate).getFullYear() : new Date().getFullYear();
+
+    res.status(201).json({ message: alreadyAssigned ? 'Already assigned' : 'Engineer added' });
+
+    if (!alreadyAssigned) {
+      setImmediate(() => {
+        appEmitter.emit('project:engineer:assign', {
+          projectId:            String(project._id),
+          projectName:          project.name,
+          clientName:           project.clientName || '',
+          engineerId:           String(engineer._id),
+          year,
+          totalAuthorizedHours: project.contractedHours + project.additionalApprovedHours,
+          resend:               false,
+        });
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ message: err.message || 'Server error', ...safeError(err) });
+  }
+};
+
+// ── DELETE /api/projects/:id/engineers/:engineerId ───────────────────────────
+export const removeEngineerFromProject = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const project = await Project.findById(req.params.id).select('engineers');
+    if (!project) { res.status(404).json({ message: 'Project not found' }); return; }
+
+    const before = project.engineers.length;
+    project.engineers = project.engineers.filter(
+      e => String(e.engineer) !== req.params.engineerId
+    ) as any;
+
+    if (project.engineers.length === before) {
+      res.status(404).json({ message: 'Engineer not found on this project' });
+      return;
+    }
+
+    await project.save();
+    res.json({ message: 'Engineer removed' });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message || 'Server error', ...safeError(err) });
+  }
+};
+
 // ── GET /api/projects/invite/:token ─────────────────────────────────────────
 export const confirmInvite = async (req: Request, res: Response): Promise<void> => {
   try {

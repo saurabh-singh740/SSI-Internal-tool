@@ -6,6 +6,9 @@ import connectDB from './config/db';
 import app from './app';
 import { startPaymentScheduler } from './utils/paymentScheduler';
 import { registerProjectHandlers } from './events/handlers/projectHandler';
+import { registerDealHandlers }    from './events/handlers/dealHandler';
+import { seedDefaultPartner }      from './modules/presales/services/PartnerService';
+import User                        from './models/User';
 
 const PORT = process.env.PORT || 5001;
 
@@ -13,15 +16,26 @@ const PORT = process.env.PORT || 5001;
 connectDB();
 
 // ── Background event handlers — must register BEFORE server listens ──────────
-// Ensures no project:engineers:process events are emitted before handlers exist.
+// Ensures no events are emitted before handlers exist.
 registerProjectHandlers();
+registerDealHandlers();
 
 // ── Start server ──────────────────────────────────────────────────────────────
 let schedulerHandle: ReturnType<typeof setInterval> | undefined;
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`[Server] Running on http://localhost:${PORT} (${process.env.NODE_ENV || 'development'})`);
   schedulerHandle = startPaymentScheduler();
+
+  // Seed the default SSI internal partner (no-op if already exists)
+  try {
+    const adminUser = await User.findOne({ role: 'ADMIN' }).lean();
+    if (adminUser) {
+      await seedDefaultPartner(adminUser._id as any);
+    }
+  } catch (err) {
+    console.error('[Server] Failed to seed default partner:', err);
+  }
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────

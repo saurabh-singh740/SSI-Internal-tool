@@ -37,11 +37,41 @@ export interface ProjectEngineerAssignPayload {
   resend:               boolean;
 }
 
+// ── Pre-Sales event payload types ─────────────────────────────────────────────
+
+export interface DealStageChangedPayload {
+  dealId:    string;
+  dealTitle: string;
+  fromStage: string;
+  toStage:   string;
+  actorId:   string;
+  ownerId:   string;
+  teamIds:   string[];
+}
+
+export interface DealConvertedPayload {
+  dealId:    string;
+  dealTitle: string;
+  projectId: string;
+  actorId:   string;
+  ownerId:   string;
+}
+
+export interface DealMentionedPayload {
+  dealId:      string;
+  mentionedId: string;
+  actorId:     string;
+  context:     string;
+}
+
 // ── Typed emitter class ───────────────────────────────────────────────────────
 
 interface AppEventMap {
   'project:engineers:process':  [ProjectEngineersProcessPayload];
   'project:engineer:assign':    [ProjectEngineerAssignPayload];
+  'deal:stage:changed':         [DealStageChangedPayload];
+  'deal:converted':             [DealConvertedPayload];
+  'deal:mentioned':             [DealMentionedPayload];
 }
 
 class AppEmitter extends EventEmitter {
