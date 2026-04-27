@@ -24,7 +24,7 @@ export async function listAttachments(req: Request, res: Response, next: NextFun
 export async function uploadAttachment(req: Request, res: Response, next: NextFunction) {
   try {
     const dealId = req.params.id;
-    const actor  = (req as any).user;
+    const actor  = (req as any).user as { id: string };
 
     // Verify deal exists
     const deal = await Deal.findById(dealId).lean();
@@ -53,7 +53,7 @@ export async function uploadAttachment(req: Request, res: Response, next: NextFu
       mimeType:     file.mimetype,
       sizeBytes:    file.size,
       category,
-      uploadedBy:   actor._id,
+      uploadedBy:   actor.id,
     });
 
     res.status(201).json({ success: true, data: attachment });
