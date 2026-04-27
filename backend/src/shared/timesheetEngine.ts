@@ -46,15 +46,25 @@ const MONTH_NAMES = [
   'July','August','September','October','November','December',
 ];
 
-/** Count Mon–Fri days in a calendar month (UTC-safe, no external deps). */
-export function getWorkingDaysInMonth(year: number, monthIndex: number): number {
-  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+/** Count Mon–Fri days between two dates, inclusive (UTC-safe). */
+export function getWorkingDaysBetween(from: Date, to: Date): number {
+  const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+  const end   = new Date(Date.UTC(to.getUTCFullYear(),   to.getUTCMonth(),   to.getUTCDate()));
   let count = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(Date.UTC(year, monthIndex, d)).getUTCDay();
-    if (dow !== 0 && dow !== 6) count++; // 0 = Sun, 6 = Sat
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const dow = cursor.getUTCDay();
+    if (dow !== 0 && dow !== 6) count++;
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return count;
+}
+
+/** Count Mon–Fri days in a full calendar month (UTC-safe). */
+export function getWorkingDaysInMonth(year: number, monthIndex: number): number {
+  const from = new Date(Date.UTC(year, monthIndex, 1));
+  const to   = new Date(Date.UTC(year, monthIndex + 1, 0));
+  return getWorkingDaysBetween(from, to);
 }
 
 /** Year+month pairs between two dates, inclusive on both ends. */
@@ -81,7 +91,13 @@ function buildProjection(assignments: ResourceAssignment[]): EngineerProjection[
       const end   = new Date(a.endDate);
 
       const months = monthRange(start, end).map(({ year, monthIndex }) => {
-        const workingDays   = getWorkingDaysInMonth(year, monthIndex);
+        // Clamp to the actual start/end within partial months
+        const monthStart = new Date(Date.UTC(year, monthIndex, 1));
+        const monthEnd   = new Date(Date.UTC(year, monthIndex + 1, 0));
+        const from = start > monthStart ? start : monthStart;
+        const to   = end   < monthEnd   ? end   : monthEnd;
+
+        const workingDays   = getWorkingDaysBetween(from, to);
         const expectedHours = Math.round(workingDays * 8 * (a.allocationPercentage / 100) * 10) / 10;
         return {
           year,
