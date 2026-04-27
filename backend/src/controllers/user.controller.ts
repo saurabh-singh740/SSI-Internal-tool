@@ -5,6 +5,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { filterBody } from '../utils/filterBody';
 import { auditLog } from '../utils/auditLogger';
 import { safeError } from '../utils/apiError';
+import { sendWelcomeEmail } from '../services/emailService';
 
 // Explicit allowlists — mass-assignment impossible
 const USER_CREATE_FIELDS = ['name', 'email', 'password', 'role', 'phone'] as const;
@@ -68,6 +69,18 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     const userObj = user.toObject() as unknown as Record<string, unknown>;
     delete userObj.password;
     res.status(201).json({ message: 'User created', user: userObj });
+
+    // Send welcome email in background — don't block the response
+    setImmediate(() => {
+      sendWelcomeEmail({
+        to:       normalizedEmail,
+        name:     String(name).trim(),
+        role:     userRole,
+        password: String(password), // raw password before hashing
+      }).then(r => {
+        if (!r.success) console.error('[Users] Welcome email failed:', r.error);
+      });
+    });
   } catch (error: any) {
     if (error.code === 11000) {
       res.status(400).json({ message: 'Email already in use' });

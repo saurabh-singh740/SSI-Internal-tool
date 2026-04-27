@@ -1,9 +1,15 @@
 import { Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
+import crypto from 'crypto';
 import User from '../models/User';
+import PasswordReset, { hashToken } from '../models/PasswordReset';
 import { signToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
+import {
+  sendPasswordResetEmail,
+  sendPasswordChangedEmail,
+} from '../services/emailService';
 
 // ── Cookie options ────────────────────────────────────────────────────────────
 
@@ -166,6 +172,116 @@ export const getSetupStatus = async (_req: Request, res: Response): Promise<void
     });
   } catch (error) {
     console.error('[Auth] getSetupStatus error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── POST /api/auth/forgot-password ───────────────────────────────────────────
+// Public. Accepts email, sends a reset link if the account exists.
+// Always returns 200 — prevents user enumeration.
+export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email } = req.body;
+    if (!email) { res.status(400).json({ message: 'Email is required' }); return; }
+
+    const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select('_id name email');
+
+    // Always respond OK — don't reveal whether the email exists
+    res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
+
+    if (!user) return; // silently do nothing
+
+    // Invalidate any existing reset tokens for this user
+    await PasswordReset.deleteMany({ user: user._id });
+
+    // Generate a cryptographically random token (32 bytes = 64 hex chars)
+    const rawToken = crypto.randomBytes(32).toString('hex');
+
+    await PasswordReset.create({
+      user:      user._id,
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+    });
+
+    // Fire-and-forget — don't await so response is already sent
+    sendPasswordResetEmail({
+      to:         user.email,
+      name:       user.name,
+      resetToken: rawToken,
+    }).then(r => {
+      if (!r.success) console.error('[Auth] forgotPassword email failed:', r.error);
+    });
+  } catch (error) {
+    console.error('[Auth] forgotPassword error:', error);
+    // No error response — user already received 200
+  }
+};
+
+// ── POST /api/auth/reset-password ─────────────────────────────────────────────
+export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      res.status(400).json({ message: 'Token and new password are required' }); return;
+    }
+    if (String(password).length < 6) {
+      res.status(400).json({ message: 'Password must be at least 6 characters' }); return;
+    }
+
+    const record = await PasswordReset.findOne({
+      tokenHash: hashToken(String(token)),
+      expiresAt: { $gt: new Date() },
+    }).populate<{ user: InstanceType<typeof User> }>('user', 'name email');
+
+    if (!record) {
+      res.status(400).json({ message: 'Reset link is invalid or has expired' }); return;
+    }
+
+    const user = await User.findById(record.user._id).select('+password');
+    if (!user) { res.status(404).json({ message: 'User not found' }); return; }
+
+    user.password = password;
+    await user.save();
+    await PasswordReset.deleteMany({ user: user._id });
+
+    // Notify user — fire and forget
+    sendPasswordChangedEmail({ to: user.email, name: user.name }).catch(() => {});
+
+    res.json({ message: 'Password reset successful. You can now log in.' });
+  } catch (error) {
+    console.error('[Auth] resetPassword error:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── PUT /api/auth/change-password ─────────────────────────────────────────────
+// Authenticated. Requires current password + new password.
+export const changePassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ message: 'currentPassword and newPassword are required' }); return;
+    }
+    if (String(newPassword).length < 6) {
+      res.status(400).json({ message: 'New password must be at least 6 characters' }); return;
+    }
+
+    const user = await User.findById(req.user?.id).select('+password');
+    if (!user) { res.status(404).json({ message: 'User not found' }); return; }
+
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      res.status(401).json({ message: 'Current password is incorrect' }); return;
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    sendPasswordChangedEmail({ to: user.email, name: user.name }).catch(() => {});
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('[Auth] changePassword error:', error);
     res.status(500).json({ message: 'Server error', ...safeError(error) });
   }
 };
