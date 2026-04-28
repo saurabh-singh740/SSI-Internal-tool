@@ -2,8 +2,12 @@
 import './config/env';
 
 import mongoose from 'mongoose';
+import { ScheduledTask } from 'node-cron';
 import connectDB from './config/db';
 import app from './app';
+import { closeRedis } from './config/redis';
+import { closeQueues } from './queues/index';
+import { startEngineerWorker, closeEngineerWorker } from './queues/workers/engineerWorker';
 import { startPaymentScheduler } from './utils/paymentScheduler';
 import { registerProjectHandlers } from './events/handlers/projectHandler';
 import { registerDealHandlers }    from './events/handlers/dealHandler';
@@ -16,16 +20,20 @@ const PORT = process.env.PORT || 5001;
 connectDB();
 
 // ── Background event handlers — must register BEFORE server listens ──────────
-// Ensures no events are emitted before handlers exist.
+// When Redis is available, BullMQ workers handle the heavy jobs instead.
+// When Redis is absent, these in-memory handlers remain active.
 registerProjectHandlers();
 registerDealHandlers();
 
+// ── BullMQ workers (active only when REDIS_URL is set) ────────────────────────
+startEngineerWorker();
+
 // ── Start server ──────────────────────────────────────────────────────────────
-let schedulerHandle: ReturnType<typeof setInterval> | undefined;
+let schedulerTask: ScheduledTask | undefined;
 
 const server = app.listen(PORT, async () => {
   console.log(`[Server] Running on http://localhost:${PORT} (${process.env.NODE_ENV || 'development'})`);
-  schedulerHandle = startPaymentScheduler();
+  schedulerTask = startPaymentScheduler();
 
   // Seed the default SSI internal partner (no-op if already exists)
   try {
@@ -41,13 +49,18 @@ const server = app.listen(PORT, async () => {
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 function gracefulShutdown(signal: string): void {
   console.log(`[Server] ${signal} received — shutting down gracefully…`);
-  if (schedulerHandle) clearInterval(schedulerHandle);
+
+  if (schedulerTask) schedulerTask.stop();
+
   server.close(async () => {
     try {
+      await closeEngineerWorker();
+      await closeQueues();
+      await closeRedis();
       await mongoose.connection.close();
-      console.log('[Server] MongoDB connection closed');
+      console.log('[Server] All connections closed');
     } catch (err) {
-      console.error('[Server] Error closing MongoDB:', err);
+      console.error('[Server] Error during shutdown:', err);
     }
     console.log('[Server] Shutdown complete');
     process.exit(0);

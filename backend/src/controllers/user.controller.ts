@@ -1,11 +1,17 @@
 import { Response } from 'express';
+import mongoose from 'mongoose';
 import validator from 'validator';
 import User from '../models/User';
+import Project from '../models/Project';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { filterBody } from '../utils/filterBody';
 import { auditLog } from '../utils/auditLogger';
 import { safeError } from '../utils/apiError';
 import { sendWelcomeEmail } from '../services/emailService';
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Explicit allowlists — mass-assignment impossible
 const USER_CREATE_FIELDS = ['name', 'email', 'password', 'role', 'phone'] as const;
@@ -111,16 +117,83 @@ export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void
 };
 
 // ── GET /api/users/engineers ──────────────────────────────────────────────────
-export const getEngineers = async (_req: AuthRequest, res: Response): Promise<void> => {
+// Supports ?search=<name|email> and ?limit=<n> (max 200, default 100)
+export const getEngineers = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const search = req.query.search ? String(req.query.search).slice(0, 100) : '';
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 100));
+
+    const filter: Record<string, unknown> = { role: { $in: ['ENGINEER', 'ADMIN'] } };
+    if (search) {
+      const safe = escapeRegex(search);
+      filter.$or = [
+        { name:  { $regex: safe, $options: 'i' } },
+        { email: { $regex: safe, $options: 'i' } },
+      ];
+    }
+
     const engineers = await User
-      .find({ role: { $in: ['ENGINEER', 'ADMIN'] } })
+      .find(filter)
       .select('-password')
       .sort({ name: 1 })
+      .limit(limit)
       .lean();
-    res.json({ users: engineers });
+
+    res.json({ users: engineers, total: engineers.length });
   } catch (error) {
     console.error('[Users] getEngineers:', error);
+    res.status(500).json({ message: 'Server error', ...safeError(error) });
+  }
+};
+
+// ── GET /api/users/:id/allocation ─────────────────────────────────────────────
+// Returns cross-project allocation for an engineer — catches over-allocation gaps.
+export const getEngineerAllocation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: 'Invalid engineer ID' });
+      return;
+    }
+
+    // Non-admins may only view their own allocation
+    if (req.user?.role !== 'ADMIN' && req.user?.id !== id) {
+      res.status(403).json({ message: 'Forbidden' });
+      return;
+    }
+
+    // Positional $ projection returns only the matching engineer subdoc
+    const projects = await Project.find(
+      { 'engineers.engineer': id, status: 'ACTIVE' },
+      { name: 1, code: 1, status: 1, 'engineers.$': 1 }
+    ).lean();
+
+    let totalAllocation = 0;
+    const breakdown = projects.map(p => {
+      const eng  = (p.engineers as any[])[0];
+      const alloc = eng?.allocationPercentage ?? 0;
+      totalAllocation += alloc;
+      return {
+        projectId:            String(p._id),
+        projectName:          p.name,
+        projectCode:          p.code,
+        role:                 eng?.role,
+        allocationPercentage: alloc,
+        startDate:            eng?.startDate,
+        endDate:              eng?.endDate,
+      };
+    });
+
+    res.json({
+      engineerId:                id,
+      totalAllocationPercentage: totalAllocation,
+      isOverallocated:           totalAllocation > 100,
+      projectCount:              projects.length,
+      breakdown,
+    });
+  } catch (error) {
+    console.error('[Users] getEngineerAllocation:', error);
     res.status(500).json({ message: 'Server error', ...safeError(error) });
   }
 };

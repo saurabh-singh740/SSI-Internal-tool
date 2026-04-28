@@ -46,8 +46,15 @@ const MONTH_NAMES = [
   'July','August','September','October','November','December',
 ];
 
-/** Count Mon–Fri days between two dates, inclusive (UTC-safe). */
+// Module-level cache keyed by date strings — bounded by unique month ranges in active engagements
+const _wdCache = new Map<string, number>();
+
+/** Count Mon–Fri days between two dates, inclusive (UTC-safe, memoized). */
 export function getWorkingDaysBetween(from: Date, to: Date): number {
+  const key = `${from.getUTCFullYear()}-${from.getUTCMonth()}-${from.getUTCDate()}|${to.getUTCFullYear()}-${to.getUTCMonth()}-${to.getUTCDate()}`;
+  const cached = _wdCache.get(key);
+  if (cached !== undefined) return cached;
+
   const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
   const end   = new Date(Date.UTC(to.getUTCFullYear(),   to.getUTCMonth(),   to.getUTCDate()));
   let count = 0;
@@ -57,6 +64,7 @@ export function getWorkingDaysBetween(from: Date, to: Date): number {
     if (dow !== 0 && dow !== 6) count++;
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
+  _wdCache.set(key, count);
   return count;
 }
 

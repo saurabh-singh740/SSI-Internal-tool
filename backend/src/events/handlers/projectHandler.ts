@@ -29,8 +29,9 @@ import { generateYearSheets } from '../../utils/timesheetGenerator';
 // ── Shared per-engineer logic ─────────────────────────────────────────────────
 // Used by BOTH 'project:engineers:process' and 'project:engineer:assign'
 // so the logic stays in one place.
+// Exported so the BullMQ worker can reuse it without duplicating business logic.
 
-async function processOneEngineer(opts: {
+export async function processOneEngineer(opts: {
   projectId:            string;
   projectName:          string;
   clientName:           string;
@@ -100,8 +101,9 @@ async function processOneEngineer(opts: {
 
 // ── Handler: project:engineers:process ───────────────────────────────────────
 // Fired by createProject. Fans out across all assigned engineers in parallel.
+// Exported so the BullMQ worker can call it directly.
 
-async function handleProjectCreated(payload: ProjectEngineersProcessPayload): Promise<void> {
+export async function handleProjectCreated(payload: ProjectEngineersProcessPayload): Promise<void> {
   const { projectId, projectName, clientName, engineerIds, year, totalAuthorizedHours } = payload;
 
   if (!engineerIds.length) return;
@@ -143,7 +145,7 @@ async function handleProjectCreated(payload: ProjectEngineersProcessPayload): Pr
 // ── Handler: project:engineer:assign ─────────────────────────────────────────
 // Fired by assignEngineer (standalone assignment outside project creation).
 
-async function handleEngineerAssign(payload: ProjectEngineerAssignPayload): Promise<void> {
+export async function handleEngineerAssign(payload: ProjectEngineerAssignPayload): Promise<void> {
   const { projectId, projectName, clientName, engineerId, year, totalAuthorizedHours, resend } = payload;
 
   await processOneEngineer({

@@ -6,6 +6,10 @@ import Project from '../models/Project';
 import Notification from '../models/Notification';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
+import { cacheGet, cacheSet, cacheDel } from '../utils/cache';
+
+const CACHE_KEY_PAYMENT_SUMMARY = 'stats:payments';
+const CACHE_TTL_SUMMARY = 60; // seconds
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -104,36 +108,50 @@ export const getPaymentSummary = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const now      = new Date();
-    const thirty   = new Date(now);
+    // Serve from cache when available (60-second TTL)
+    const cached = await cacheGet<{ summary: object }>(CACHE_KEY_PAYMENT_SUMMARY);
+    if (cached) { res.json(cached); return; }
+
+    const thirty = new Date();
     thirty.setDate(thirty.getDate() - 30);
 
-    const [totals, last30, overdue, pending] = await Promise.all([
-      Payment.aggregate([
-        { $match: { status: 'received' } },
-        { $group: { _id: null, totalRevenue: { $sum: '$netAmount' } } },
-      ]),
-      Payment.aggregate([
-        { $match: { status: 'received', paymentDate: { $gte: thirty } } },
-        { $group: { _id: null, total: { $sum: '$netAmount' }, count: { $sum: 1 } } },
-      ]),
-      Payment.countDocuments({ status: 'overdue' }),
-      Payment.aggregate([
-        { $match: { status: 'pending' } },
-        { $group: { _id: null, total: { $sum: '$grossAmount' }, count: { $sum: 1 } } },
-      ]),
+    // Single round-trip: $facet runs all four pipelines in one aggregation pass
+    const [result] = await Payment.aggregate([
+      {
+        $facet: {
+          totalRevenue: [
+            { $match: { status: 'received' } },
+            { $group: { _id: null, v: { $sum: '$netAmount' } } },
+          ],
+          last30: [
+            { $match: { status: 'received', paymentDate: { $gte: thirty } } },
+            { $group: { _id: null, total: { $sum: '$netAmount' }, count: { $sum: 1 } } },
+          ],
+          overdue: [
+            { $match: { status: 'overdue' } },
+            { $count: 'count' },
+          ],
+          pending: [
+            { $match: { status: 'pending' } },
+            { $group: { _id: null, total: { $sum: '$grossAmount' }, count: { $sum: 1 } } },
+          ],
+        },
+      },
     ]);
 
-    res.json({
+    const payload = {
       summary: {
-        totalRevenue:   totals[0]?.totalRevenue   ?? 0,
-        last30DaysRevenue: last30[0]?.total       ?? 0,
-        last30DaysCount:   last30[0]?.count        ?? 0,
-        overdueCount:   overdue,
-        pendingAmount:  pending[0]?.total          ?? 0,
-        pendingCount:   pending[0]?.count          ?? 0,
+        totalRevenue:      result.totalRevenue[0]?.v     ?? 0,
+        last30DaysRevenue: result.last30[0]?.total       ?? 0,
+        last30DaysCount:   result.last30[0]?.count       ?? 0,
+        overdueCount:      result.overdue[0]?.count      ?? 0,
+        pendingAmount:     result.pending[0]?.total      ?? 0,
+        pendingCount:      result.pending[0]?.count      ?? 0,
       },
-    });
+    };
+
+    void cacheSet(CACHE_KEY_PAYMENT_SUMMARY, payload, CACHE_TTL_SUMMARY);
+    res.json(payload);
   } catch (err) {
     console.error('[Payment] getPaymentSummary:', err);
     res.status(500).json({ message: 'Server error', ...safeError(err) });
@@ -290,6 +308,7 @@ export const createPayment = async (req: AuthRequest, res: Response): Promise<vo
       .populate('projectId', 'name code clientName currency')
       .populate('createdBy', 'name email');
 
+    void cacheDel(CACHE_KEY_PAYMENT_SUMMARY);
     res.status(201).json({ message: 'Payment created', payment: populated });
   } catch (err) {
     console.error('[Payment] createPayment:', err);
@@ -347,6 +366,7 @@ export const updatePayment = async (req: AuthRequest, res: Response): Promise<vo
       .populate('projectId', 'name code clientName currency')
       .populate('createdBy', 'name email');
 
+    void cacheDel(CACHE_KEY_PAYMENT_SUMMARY);
     res.json({ message: 'Payment updated', payment: populated });
   } catch (err) {
     console.error('[Payment] updatePayment:', err);
@@ -372,6 +392,7 @@ export const deletePayment = async (req: AuthRequest, res: Response): Promise<vo
     });
 
     await payment.deleteOne();
+    void cacheDel(CACHE_KEY_PAYMENT_SUMMARY);
     res.json({ message: 'Payment deleted' });
   } catch (err) {
     console.error('[Payment] deletePayment:', err);

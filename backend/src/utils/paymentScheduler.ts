@@ -1,7 +1,7 @@
 /**
  * Payment reminder scheduler.
  *
- * Runs once at startup (to catch any missed windows) and then every 24 hours.
+ * Runs once at startup (to catch any missed windows) and then daily at 01:00 UTC.
  *
  * Multi-instance safety: before each tick, acquires a MongoDB advisory lock with
  * a 23-hour TTL.  If another instance already holds the lock (i.e. ran within the
@@ -15,12 +15,12 @@
  *  4. Create in-app notifications for payments due in 7 days
  */
 
+import cron, { ScheduledTask } from 'node-cron';
 import mongoose from 'mongoose';
 import { runOverdueCheck } from '../controllers/payment.controller';
 
-const INTERVAL_MS  = 24 * 60 * 60 * 1000; // 24 hours
-const LOCK_NAME    = 'payment-overdue-check';
-const LOCK_TTL_MS  = 23 * 60 * 60 * 1000; // 23 hours — slightly under interval
+const LOCK_NAME   = 'payment-overdue-check';
+const LOCK_TTL_MS = 23 * 60 * 60 * 1000; // 23 hours — slightly under the 24h schedule
 
 // ── Distributed lock helpers ──────────────────────────────────────────────────
 
@@ -38,9 +38,9 @@ async function acquireLock(): Promise<boolean> {
   // instance already acquired it within the TTL window.
   try {
     await col.insertOne({
-      _id: LOCK_NAME,
-      acquiredAt: now,
-      expiresAt: new Date(now.getTime() + LOCK_TTL_MS),
+      _id:         LOCK_NAME,
+      acquiredAt:  now,
+      expiresAt:   new Date(now.getTime() + LOCK_TTL_MS),
     });
     return true;
   } catch (err: any) {
@@ -70,15 +70,15 @@ async function tick(): Promise<void> {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-// Returns the interval handle so the caller (index.ts) can clear it on shutdown.
+// Returns the cron task so the caller (index.ts) can stop it on shutdown.
 
-export function startPaymentScheduler(): ReturnType<typeof setInterval> {
+export function startPaymentScheduler(): ScheduledTask {
   // Run immediately on boot to catch any overnight changes
   void tick();
 
-  // Then repeat every 24 hours
-  const handle = setInterval(() => { void tick(); }, INTERVAL_MS);
+  // Daily at 01:00 UTC — deterministic, avoids midnight race on date rollover
+  const task = cron.schedule('0 1 * * *', () => { void tick(); }, { timezone: 'UTC' });
 
-  console.log('[PaymentScheduler] Started — daily overdue check enabled (distributed lock active)');
-  return handle;
+  console.log('[PaymentScheduler] Started — daily overdue check at 01:00 UTC (distributed lock active)');
+  return task;
 }

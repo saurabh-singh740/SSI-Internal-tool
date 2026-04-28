@@ -47,7 +47,7 @@ export async function getPartner(req: Request, res: Response, next: NextFunction
 // POST /api/partners
 export async function createPartner(req: Request, res: Response, next: NextFunction) {
   try {
-    const actorId = (req as any).user._id.toString();
+    const actorId = (req as any).user.id as string;
     const data    = filterBody(req.body);
     if (!data.name) return res.status(400).json({ success: false, message: 'name is required' });
     const partner = await PartnerService.createPartner(data as any, actorId);

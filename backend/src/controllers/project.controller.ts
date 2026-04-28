@@ -7,9 +7,13 @@ import EngineerInvite from '../models/EngineerInvite';
 import Timesheet from '../models/Timesheet';
 import Payment from '../models/Payment';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { appEmitter } from '../events/emitter';
+import { dispatchProjectEngineers } from '../queues/dispatch';
 import { filterBody } from '../utils/filterBody';
 import { safeError } from '../utils/apiError';
+import { cacheGet, cacheSet, cacheDel } from '../utils/cache';
+
+const CACHE_KEY_PROJECT_STATS = 'stats:projects';
+const CACHE_TTL_STATS = 60; // seconds
 
 /** Escape a string so it is safe to embed in a MongoDB $regex operator. */
 function escapeRegex(s: string): string {
@@ -181,6 +185,9 @@ export const createProject = async (req: AuthRequest, res: Response): Promise<vo
     // pre-save hooks so they are correct in the returned document.
     res.status(201).json({ message: 'Project created', project });
 
+    // Invalidate cached stats so next dashboard load reflects the new project
+    setImmediate(() => { void cacheDel(CACHE_KEY_PROJECT_STATS); });
+
     // ── Fire background work after response is flushed ────────────────────────
     // setImmediate guarantees the event loop has returned the response to the
     // client before we start the potentially slow background operations.
@@ -190,7 +197,7 @@ export const createProject = async (req: AuthRequest, res: Response): Promise<vo
         : new Date().getFullYear();
 
       setImmediate(() => {
-        appEmitter.emit('project:engineers:process', {
+        dispatchProjectEngineers({
           projectId:            String(project._id),
           projectName:          project.name,
           clientName:           project.clientName || '',
@@ -279,6 +286,7 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
       .populate('engineers.engineer', 'name email role')
       .populate('createdBy', 'name email');
 
+    void cacheDel(CACHE_KEY_PROJECT_STATS);
     res.json({ message: 'Project updated', project: populated });
   } catch (error: any) {
     res.status(500).json({ message: error.message || 'Server error', ...safeError(error) });
@@ -304,6 +312,7 @@ export const deleteProject = async (req: Request, res: Response): Promise<void> 
     ]);
 
     await project.deleteOne();
+    void cacheDel(CACHE_KEY_PROJECT_STATS);
     res.json({ message: 'Project deleted' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', ...safeError(error) });
@@ -345,16 +354,35 @@ export const getProjectMetrics = async (req: Request, res: Response): Promise<vo
 // GET /api/projects/stats/summary
 export const getProjectStats = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [total, active, closed, onHold] = await Promise.all([
-      Project.countDocuments(),
-      Project.countDocuments({ status: 'ACTIVE' }),
-      Project.countDocuments({ status: 'CLOSED' }),
-      Project.countDocuments({ status: 'ON_HOLD' }),
+    // Serve from cache when available (60-second TTL)
+    const cached = await cacheGet<{ stats: object }>(CACHE_KEY_PROJECT_STATS);
+    if (cached) { res.json(cached); return; }
+
+    // Single round-trip: $facet runs all five counts in one aggregation pass
+    const [result] = await Project.aggregate([
+      {
+        $facet: {
+          total:     [{ $count: 'v' }],
+          active:    [{ $match: { status: 'ACTIVE' } },                    { $count: 'v' }],
+          closed:    [{ $match: { status: 'CLOSED' } },                    { $count: 'v' }],
+          onHold:    [{ $match: { status: 'ON_HOLD' } },                   { $count: 'v' }],
+          nearLimit: [{ $match: { status: 'ACTIVE', isNearLimit: true } }, { $count: 'v' }],
+        },
+      },
     ]);
 
-    const nearLimit = await Project.countDocuments({ isNearLimit: true, status: 'ACTIVE' });
+    const payload = {
+      stats: {
+        total:     result.total[0]?.v     ?? 0,
+        active:    result.active[0]?.v    ?? 0,
+        closed:    result.closed[0]?.v    ?? 0,
+        onHold:    result.onHold[0]?.v    ?? 0,
+        nearLimit: result.nearLimit[0]?.v ?? 0,
+      },
+    };
 
-    res.json({ stats: { total, active, closed, onHold, nearLimit } });
+    void cacheSet(CACHE_KEY_PROJECT_STATS, payload, CACHE_TTL_STATS);
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ message: 'Server error', ...safeError(error) });
   }

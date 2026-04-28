@@ -40,4 +40,7 @@ const NotificationSchema = new Schema<INotification>(
 // Query pattern: { user, read } for unread count + list
 NotificationSchema.index({ user: 1, read: 1, createdAt: -1 });
 
+// Auto-purge notifications older than 90 days — prevents unbounded collection growth
+NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+
 export default mongoose.model<INotification>('Notification', NotificationSchema);

@@ -28,11 +28,11 @@ if (jwtSecret.length < 32) {
 }
 
 // ── Startup env-var log (safe – no secrets printed) ──────────────────────────
-console.log('[Env] NODE_ENV   :', process.env.NODE_ENV  || '(not set)');
-console.log('[Env] MONGO_URI  :', process.env.MONGO_URI ? '✓ set' : '⚠  NOT SET');
-console.log('[Env] JWT_SECRET :', process.env.JWT_SECRET ? `✓ set (${jwtSecret.length} chars)` : '⚠  NOT SET');
-console.log('[Env] EMAIL_USER :', process.env.EMAIL_USER
-  ? `${process.env.EMAIL_USER.slice(0, 4)}…` // print only first 4 chars
-  : '⚠  NOT SET');
-console.log('[Env] EMAIL_PASS :', process.env.EMAIL_PASS ? '✓ set' : '⚠  NOT SET');
-console.log('[Env] APP_BASE_URL:', process.env.APP_BASE_URL || 'http://localhost:5173 (default)');
+console.log('[Env] NODE_ENV        :', process.env.NODE_ENV  || '(not set)');
+console.log('[Env] MONGO_URI       :', process.env.MONGO_URI ? '✓ set' : '⚠  NOT SET');
+console.log('[Env] JWT_SECRET      :', process.env.JWT_SECRET ? `✓ set (${jwtSecret.length} chars)` : '⚠  NOT SET');
+console.log('[Env] RESEND_API_KEY  :', process.env.RESEND_API_KEY  ? '✓ set' : '⚠  not set (emails disabled)');
+console.log('[Env] FROM_EMAIL      :', process.env.FROM_EMAIL      || 'noreply@stallionsi.com (default)');
+console.log('[Env] APP_BASE_URL    :', process.env.APP_BASE_URL    || 'http://localhost:5173 (default)');
+console.log('[Env] CLOUDINARY      :', process.env.CLOUDINARY_CLOUD_NAME ? '✓ set' : '⚠  not set (base64 fallback)');
+console.log('[Env] REDIS_URL       :', process.env.REDIS_URL ? '✓ set (BullMQ + rate limiting + caching active)' : 'not set (memory store, in-process queues)');

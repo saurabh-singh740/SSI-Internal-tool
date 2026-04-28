@@ -32,7 +32,13 @@ export interface EmailResult {
   error?:     string;
 }
 
-// ── Resend sender ─────────────────────────────────────────────────────────────
+// ── Resend sender with retry ──────────────────────────────────────────────────
+const MAX_ATTEMPTS = 3;
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function send(opts: {
   to:      string;
   subject: string;
@@ -46,26 +52,45 @@ async function send(opts: {
   }
 
   const resend = new Resend(apiKey);
-  try {
-    const { data, error } = await resend.emails.send({
-      from:    `Stallion SI <${getFromEmail()}>`,
-      to:      opts.to,
-      subject: opts.subject,
-      html:    opts.html,
-    });
+  let lastError = '';
 
-    if (error) {
-      console.error('[Email] Resend error:', error);
-      return { success: false, error: error.message };
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { data, error } = await resend.emails.send({
+        from:    `Stallion SI <${getFromEmail()}>`,
+        to:      opts.to,
+        subject: opts.subject,
+        html:    opts.html,
+      });
+
+      if (error) {
+        lastError = error.message;
+        // Retry on rate-limit (429) or server errors (5xx); bail on client errors
+        const status = (error as any).statusCode ?? 0;
+        const retriable = status === 429 || status >= 500;
+        if (retriable && attempt < MAX_ATTEMPTS) {
+          console.warn(`[Email] Attempt ${attempt} failed (${status}), retrying in ${attempt}s…`);
+          await delay(attempt * 1_000);
+          continue;
+        }
+        console.error('[Email] Resend error:', error);
+        return { success: false, error: lastError };
+      }
+
+      if (attempt > 1) console.log(`[Email] ✓ Sent after ${attempt} attempts`);
+      console.log(`[Email] ✓ Sent "${opts.subject}" to ${opts.to} — id: ${data?.id}`);
+      return { success: true, messageId: data?.id };
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (attempt < MAX_ATTEMPTS) {
+        console.warn(`[Email] Attempt ${attempt} threw, retrying in ${attempt}s… ${lastError}`);
+        await delay(attempt * 1_000);
+      }
     }
-
-    console.log(`[Email] ✓ Sent "${opts.subject}" to ${opts.to} — id: ${data?.id}`);
-    return { success: true, messageId: data?.id };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[Email] ✗ send failed:', msg);
-    return { success: false, error: msg };
   }
+
+  console.error('[Email] ✗ All attempts failed:', lastError);
+  return { success: false, error: lastError };
 }
 
 // ── Shared header/footer wrappers ─────────────────────────────────────────────
