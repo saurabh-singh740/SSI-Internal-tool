@@ -16,8 +16,7 @@ export function getRedisClient(): Redis | null {
 
   _client = new Redis(process.env.REDIS_URL, {
     maxRetriesPerRequest: null, // required for BullMQ
-    enableReadyCheck:     false,
-    lazyConnect:          true,
+    enableReadyCheck:     true,
   });
 
   _client.on('error', (err) => {
