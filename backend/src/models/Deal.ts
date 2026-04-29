@@ -197,9 +197,18 @@ const DealSchema = new Schema<IDeal>(
 
 DealSchema.pre('save', async function (next) {
   if (this.isNew && !this.dealNumber) {
-    const count = await mongoose.model('Deal').countDocuments();
-    const year  = new Date().getFullYear();
-    this.dealNumber = `DEAL-${year}-${String(count + 1).padStart(4, '0')}`;
+    // Atomic $inc on a counters document — O(1) regardless of deal volume.
+    // countDocuments() was O(n) and would degrade noticeably at 10k+ deals.
+    const db      = mongoose.connection.db!;
+    const counter = await db
+      .collection<{ _id: string; seq: number }>('counters')
+      .findOneAndUpdate(
+        { _id: 'deal' },
+        { $inc: { seq: 1 } },
+        { upsert: true, returnDocument: 'after' }
+      );
+    const year = new Date().getFullYear();
+    this.dealNumber = `DEAL-${year}-${String(counter!.seq).padStart(4, '0')}`;
   }
   next();
 });

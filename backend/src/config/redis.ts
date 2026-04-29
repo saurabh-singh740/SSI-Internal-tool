@@ -15,10 +15,16 @@ export function getRedisClient(): Redis | null {
   if (_client) return _client;
 
   _client = new Redis(process.env.REDIS_URL, {
-    maxRetriesPerRequest: null, // required for BullMQ
-    enableReadyCheck:     true,
+    maxRetriesPerRequest:  null,  // required for BullMQ
+    enableReadyCheck:      true,
+    // BullMQ creates additional internal connections that inherit this config.
+    // retryStrategy controls reconnect behaviour for ALL of them — cap at 10s
+    // to avoid hammering a temporarily unavailable Redis.
+    retryStrategy: (times) => Math.min(times * 500, 10_000),
   });
 
+  // MUST attach error handler before anything else — ioredis emits 'error' as
+  // an EventEmitter event and Node crashes if no listener is registered.
   _client.on('error', (err) => {
     console.error('[Redis] Connection error:', err.message);
   });

@@ -97,11 +97,15 @@ export const getProjects = async (req: AuthRequest, res: Response): Promise<void
 
     const [projects, total] = await Promise.all([
       Project.find(filter)
+        // Exclude heavy embedded arrays — attachments can contain base64 blobs
+        // (several MB each) and customFields/notes are not rendered in list views.
+        // Full document is still returned by getProjectById for the detail page.
+        .select('-attachments -customFields -notes -description')
         .populate('createdBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .lean(),   // plain JS objects — 3x faster, no Mongoose overhead for list views
+        .lean(),
       Project.countDocuments(filter),
     ]);
 

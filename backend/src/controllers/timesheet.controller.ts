@@ -223,14 +223,24 @@ export const updateEntry = async (req: AuthRequest, res: Response): Promise<void
       : 0;
     recalculateAuthorizedHours(timesheet.months, totalAuthorizedHours);
 
-    const totalUsed = timesheet.months.reduce((s, m) => s + m.monthlyTotal, 0);
+    const hoursUsed = Math.round(
+      timesheet.months.reduce((s, m) => s + m.monthlyTotal, 0) * 100
+    ) / 100;
+
     if (project) {
-      project.hoursUsed = Math.round(totalUsed * 100) / 100;
-      await project.save();
+      // Targeted field update — skips the full pre-save hook chain (engineer
+      // allocation validation + totalAuthorizedHours recompute) which is
+      // expensive and irrelevant when only hoursUsed changed.
+      const projectUpdate: Record<string, unknown> = { hoursUsed };
+      if (project.maxAllowedHours > 0) {
+        projectUpdate.isNearLimit =
+          (hoursUsed / project.maxAllowedHours) * 100 >= project.alertThreshold;
+      }
+      await Project.updateOne({ _id: projectId }, { $set: projectUpdate });
     }
 
     await timesheet.save();
-    res.json({ month, hoursUsed: project?.hoursUsed });
+    res.json({ month, hoursUsed });
   } catch (err: unknown) {
     console.error('[Timesheet] updateEntry error:', err);
     res.status(500).json({ message: 'Server error', ...safeError(err) });
@@ -332,12 +342,23 @@ export const rebuildAllStructure = async (req: AuthRequest, res: Response): Prom
   try {
     let rebuilt = 0;
 
+    // Prefetch all projects referenced by timesheets — 2 queries total instead
+    // of 1 query per timesheet document (eliminates the N+1 pattern).
+    const projectIds = await Timesheet.distinct('project');
+    const projectDocs = await Project.find(
+      { _id: { $in: projectIds } },
+      { contractedHours: 1, additionalApprovedHours: 1 }
+    ).lean();
+    const projectMap = new Map(
+      projectDocs.map((p) => [String(p._id), p as { contractedHours: number; additionalApprovedHours: number }])
+    );
+
     // Use .cursor() to iterate one document at a time — avoids loading all
     // timesheets into memory simultaneously (N × 12 months × ~31 entries each)
     const cursor = Timesheet.find({}).cursor();
 
     for await (const ts of cursor) {
-      const project = await Project.findById(ts.project);
+      const project = projectMap.get(String(ts.project));
       const totalAuthorizedHours = project
         ? project.contractedHours + project.additionalApprovedHours
         : 0;

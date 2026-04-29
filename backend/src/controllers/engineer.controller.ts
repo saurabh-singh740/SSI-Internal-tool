@@ -3,7 +3,7 @@ import Project from '../models/Project';
 import User from '../models/User';
 import EngineerInvite from '../models/EngineerInvite';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { appEmitter } from '../events/emitter';
+import { dispatchEngineerAssign } from '../queues/dispatch';
 import { sendEngineerAssignmentEmail } from '../services/emailService';
 import { safeError } from '../utils/apiError';
 
@@ -71,7 +71,7 @@ export const assignEngineer = async (req: AuthRequest, res: Response): Promise<v
 
     // ── Background: timesheet + invite + email ───────────────────────────────
     setImmediate(() => {
-      appEmitter.emit('project:engineer:assign', {
+      dispatchEngineerAssign({
         projectId:            String(project._id),
         projectName:          project.name,
         clientName:           project.clientName || '',
@@ -126,7 +126,7 @@ export const addEngineerToProject = async (req: AuthRequest, res: Response): Pro
 
     if (!alreadyAssigned) {
       setImmediate(() => {
-        appEmitter.emit('project:engineer:assign', {
+        dispatchEngineerAssign({
           projectId:            String(project._id),
           projectName:          project.name,
           clientName:           project.clientName || '',
