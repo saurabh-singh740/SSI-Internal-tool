@@ -5,6 +5,7 @@ import Project from '../models/Project';
 import Notification from '../models/Notification';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { generateYearSheets, recalculateMonthTotals, recalculateAuthorizedHours } from '../utils/timesheetGenerator';
+import { getWorkingDaysBetween } from '../shared/timesheetEngine';
 import { safeError } from '../utils/apiError';
 
 function isValidObjectId(id: string): boolean {
@@ -183,36 +184,91 @@ export const updateEntry = async (req: AuthRequest, res: Response): Promise<void
     const entry = month.entries.find((e: any) => String(e._id) === entryId);
     if (!entry) { res.status(404).json({ message: 'Entry not found' }); return; }
 
-    // Enforce project date range — compare YYYY-MM-DD strings in UTC to avoid
-    // any local-timezone shift between entry dates and project boundary dates.
-    if (project) {
-      const entryDay = new Date(entry.date as any).toISOString().slice(0, 10);
+    // ── Scheduling rules — mirror pre-sales allocation logic ─────────────────
+    // Pre-sales uses: workingDays × 8h × (allocationPct/100) to plan hours.
+    // Actual timesheets must obey the same constraints so execution matches plan.
 
-      if (project.startDate) {
-        const startDay = new Date(project.startDate).toISOString().slice(0, 10);
+    const { projectWork, hours, minutes, remarks } = req.body;
+
+    // Resolve the hours/minutes being requested (default to current entry values
+    // so text-only updates — projectWork, remarks — skip the numeric checks).
+    const requestedHours   = hours   !== undefined ? Math.max(0, Number(hours))   : entry.hours;
+    const requestedMinutes = minutes !== undefined ? Math.max(0, Math.min(59, Number(minutes))) : entry.minutes;
+    const requestedTotal   = Math.round((requestedHours + requestedMinutes / 60) * 100) / 100;
+
+    const entryDate = new Date(entry.date as any);
+    const entryDay  = entryDate.toISOString().slice(0, 10);
+    const dow       = entryDate.getUTCDay(); // 0 = Sunday, 6 = Saturday
+
+    // 1. Block weekends — identical exclusion to getWorkingDaysBetween in timesheetEngine
+    if (requestedTotal > 0 && (dow === 0 || dow === 6)) {
+      res.status(400).json({
+        message: 'Weekend entries are not allowed. Timesheets track working days only (Mon–Fri).',
+      }); return;
+    }
+
+    if (project) {
+      // 2. Resolve this engineer's project assignment.
+      //    Engineer-specific dates take precedence over project-level dates;
+      //    fall back to project dates when no per-engineer dates are set.
+      const assignment     = project.engineers.find(e => String(e.engineer) === engineerId);
+      const allocationPct  = assignment?.allocationPercentage ?? 100;
+      const effectiveStart = assignment?.startDate ?? project.startDate;
+      const effectiveEnd   = assignment?.endDate   ?? project.endDate;
+
+      // 3. Enforce date boundaries (UTC string comparison — timezone-safe)
+      if (effectiveStart) {
+        const startDay = new Date(effectiveStart).toISOString().slice(0, 10);
         if (entryDay < startDay) {
           res.status(400).json({
-            message: `This date is before the project start date (${startDay}). Timesheet entries are not allowed before the project begins.`,
-          });
-          return;
+            message: `This date (${entryDay}) is before the assignment start date (${startDay}).`,
+          }); return;
+        }
+      }
+      if (effectiveEnd) {
+        const endDay = new Date(effectiveEnd).toISOString().slice(0, 10);
+        if (entryDay > endDay) {
+          res.status(400).json({
+            message: `This date (${entryDay}) is after the assignment end date (${endDay}).`,
+          }); return;
         }
       }
 
-      if (project.endDate) {
-        const endDay = new Date(project.endDate).toISOString().slice(0, 10);
-        if (entryDay > endDay) {
-          res.status(400).json({
-            message: `This date is after the project end date (${endDay}). Timesheet entries are not allowed after the project ends.`,
-          });
-          return;
+      // 4. Enforce daily hours cap: 8h × allocationPercentage
+      //    Matches the per-day formula used in timesheetEngine.buildProjection().
+      const maxDailyHours = (8 * allocationPct) / 100;
+      if (requestedTotal > maxDailyHours + 1e-9) {
+        res.status(400).json({
+          message: `Max ${maxDailyHours.toFixed(1)}h/day at ${allocationPct}% allocation. You requested ${requestedTotal.toFixed(2)}h.`,
+        }); return;
+      }
+
+      // 5. Prevent overfilling beyond the planned allocation budget.
+      //    Budget = getWorkingDaysBetween(start, end) × 8h × allocationPct — the
+      //    same formula that pre-sales uses to derive totalExpectedHours.
+      if (effectiveStart && effectiveEnd && requestedTotal !== (entry.totalHours ?? 0)) {
+        const budget = getWorkingDaysBetween(
+          new Date(effectiveStart),
+          new Date(effectiveEnd),
+        ) * 8 * (allocationPct / 100);
+
+        if (budget > 0) {
+          const currentSheetTotal = timesheet.months.reduce((s, m) => s + m.monthlyTotal, 0);
+          const prospectiveTotal  = currentSheetTotal - (entry.totalHours ?? 0) + requestedTotal;
+
+          if (prospectiveTotal > budget + 1e-9) {
+            const remaining = Math.max(0, budget - currentSheetTotal + (entry.totalHours ?? 0));
+            res.status(400).json({
+              message: `This would exceed the planned allocation of ${budget.toFixed(1)}h. You have ${remaining.toFixed(2)}h remaining.`,
+            }); return;
+          }
         }
       }
     }
 
-    // Validated field updates
-    const { projectWork, hours, minutes, remarks } = req.body;
+    // ── Apply validated field updates ─────────────────────────────────────────
     if (projectWork !== undefined) entry.projectWork = String(projectWork).slice(0, 500);
-    if (hours       !== undefined) entry.hours       = Math.max(0, Math.min(23, Number(hours)));
+    if (hours       !== undefined) entry.hours       = Math.max(0, Math.min(8, Number(hours)));
     if (minutes     !== undefined) entry.minutes     = Math.max(0, Math.min(59, Number(minutes)));
     if (remarks     !== undefined) entry.remarks     = String(remarks).slice(0, 500);
 
