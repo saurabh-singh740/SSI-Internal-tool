@@ -24,7 +24,10 @@ function buildEntries(year: number, monthIndex: number): ITimesheetEntry[] {
 
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(Date.UTC(year, monthIndex, day)); // UTC midnight — timezone-safe
-    const dayOfWeek = DAY_NAMES[date.getUTCDay()];
+    const dow  = date.getUTCDay(); // 0 = Sunday, 6 = Saturday
+    if (dow === 0 || dow === 6) continue; // skip weekends — timesheets are working days only
+
+    const dayOfWeek = DAY_NAMES[dow];
     const week = weekOfMonth(year, monthIndex, day);
 
     entries.push({
