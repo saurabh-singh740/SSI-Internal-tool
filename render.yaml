@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ssi-admin
+    env: node
+    # Builds frontend (→ backend/public/) then compiles backend TypeScript
+    buildCommand: npm run build
+    startCommand: node backend/dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.17.0
