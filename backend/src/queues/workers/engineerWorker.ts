@@ -12,7 +12,6 @@
  * EventEmitter handlers in projectHandler.ts handle the same work.
  */
 import { Worker, Job } from 'bullmq';
-import { getRedisClient } from '../../config/redis';
 import { handleProjectCreated, handleEngineerAssign } from '../../events/handlers/projectHandler';
 import {
   ProjectEngineersProcessPayload,
@@ -22,8 +21,7 @@ import {
 let _worker: Worker | null = null;
 
 export function startEngineerWorker(): Worker | null {
-  const client = getRedisClient();
-  if (!client) {
+  if (!process.env.REDIS_URL) {
     console.log('[EngineerWorker] Redis not configured — using in-memory EventEmitter fallback');
     return null;
   }
@@ -40,10 +38,23 @@ export function startEngineerWorker(): Worker | null {
       }
     },
     {
-      connection: client,
+      // Pass URL (not shared ioredis instance) so BullMQ owns its connections.
+      // Shared instances get duplicated without error handlers → unhandled
+      // 'error' events → process crash.
+      connection: {
+        url:                  process.env.REDIS_URL,
+        maxRetriesPerRequest: null as null,
+        enableReadyCheck:     false,
+        retryStrategy:        (times: number) => Math.min(times * 500, 10_000),
+      },
       concurrency: 5,
     }
   );
+
+  // Worker is an EventEmitter — must attach error handler or Node crashes
+  _worker.on('error', (err) => {
+    console.error('[EngineerWorker] Worker error:', err.message);
+  });
 
   _worker.on('completed', (job) => {
     console.log(`[EngineerWorker] Job ${job.id} (${job.name}) completed`);
