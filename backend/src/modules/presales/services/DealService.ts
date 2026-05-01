@@ -127,6 +127,15 @@ export class DealService {
   // ── Create ──────────────────────────────────────────────────────────────────
 
   async createDeal(data: Partial<IDeal>, actorId: string) {
+    if (data.contacts && data.contacts.length > 5) {
+      throw Object.assign(new Error('Maximum 5 contacts allowed per deal'), { statusCode: 400 });
+    }
+    if (data.proposedStartDate) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      if (new Date(data.proposedStartDate) < today) {
+        throw Object.assign(new Error('Proposed start date cannot be in the past'), { statusCode: 400 });
+      }
+    }
     const deal = await Deal.create({ ...data, createdBy: actorId, owner: data.owner ?? actorId });
 
     await DealActivity.create({
@@ -142,6 +151,9 @@ export class DealService {
   // ── Update ──────────────────────────────────────────────────────────────────
 
   async updateDeal(dealId: string, data: Partial<IDeal>, actorId: string) {
+    if (data.contacts !== undefined && data.contacts.length > 5) {
+      throw Object.assign(new Error('Maximum 5 contacts allowed per deal'), { statusCode: 400 });
+    }
     const deal = await Deal.findById(dealId);
     if (!deal) throw Object.assign(new Error('Deal not found'), { statusCode: 404 });
 

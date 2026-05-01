@@ -10,7 +10,7 @@ import Header from '../../components/layout/Header';
 import KanbanColumn from '../../components/presales/KanbanColumn';
 import DealCard from '../../components/presales/DealCard';
 import LostReasonModal from '../../components/presales/LostReasonModal';
-import { STAGE_ORDER, STAGE_CONFIG } from '../../components/presales/StageConfig';
+import { STAGE_ORDER, STAGE_CONFIG, formatDealValue } from '../../components/presales/StageConfig';
 import { usePipeline, useChangeDealStage } from '../../hooks/presales/useDeals';
 import { usePartners } from '../../hooks/presales/usePartners';
 import { Deal, DealStage, DealLostReason, PipelineData, Partner } from '../../types';
@@ -159,11 +159,23 @@ export default function Pipeline() {
   // ── Stats ──────────────────────────────────────────────────────────────────
 
   const totalDeals = pipeline ? STAGE_ORDER.reduce((s, st) => s + (pipeline[st]?.length ?? 0), 0) : 0;
-  const wonValue   = pipeline ? (pipeline['WON']?.reduce((s, d) => s + d.estimatedValue, 0) ?? 0) : 0;
-  const pipelineValue = pipeline
-    ? STAGE_ORDER.filter(s => s !== 'WON' && s !== 'LOST')
-        .reduce((s, st) => s + (pipeline[st]?.reduce((a, d) => a + d.estimatedValue, 0) ?? 0), 0)
-    : 0;
+
+  const pipelineByCurrency: Record<string, number> = {};
+  const wonByCurrency: Record<string, number> = {};
+  if (pipeline) {
+    for (const stage of STAGE_ORDER.filter(s => s !== 'WON' && s !== 'LOST')) {
+      for (const d of pipeline[stage] ?? []) {
+        const c = d.currency ?? 'USD';
+        pipelineByCurrency[c] = (pipelineByCurrency[c] ?? 0) + d.estimatedValue;
+      }
+    }
+    for (const d of pipeline['WON'] ?? []) {
+      const c = d.currency ?? 'USD';
+      wonByCurrency[c] = (wonByCurrency[c] ?? 0) + d.estimatedValue;
+    }
+  }
+  const pipelineStr = Object.entries(pipelineByCurrency).filter(([, v]) => v > 0).map(([c, v]) => formatDealValue(v, c)).join(' · ');
+  const wonStr      = Object.entries(wonByCurrency).filter(([, v]) => v > 0).map(([c, v]) => formatDealValue(v, c)).join(' · ');
 
   const activePartnerName = partners.find(p => p._id === partnerFilter)?.name;
 
@@ -226,15 +238,15 @@ export default function Pipeline() {
           })}
 
           <div className="ml-auto flex items-center gap-4 flex-shrink-0 pl-4">
-            {pipelineValue > 0 && (
+            {pipelineStr && (
               <div className="text-xs text-ink-500">
-                Pipeline: <span className="font-semibold text-ink-300">${pipelineValue.toLocaleString()}</span>
+                Pipeline: <span className="font-semibold text-ink-300">{pipelineStr}</span>
               </div>
             )}
-            {wonValue > 0 && (
+            {wonStr && (
               <div className="flex items-center gap-1.5 text-xs text-emerald-400">
                 <TrendingUp className="h-3.5 w-3.5" />
-                <span className="font-semibold">Won: ${wonValue.toLocaleString()}</span>
+                <span className="font-semibold">Won: {wonStr}</span>
               </div>
             )}
           </div>

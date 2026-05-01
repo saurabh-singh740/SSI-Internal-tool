@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Deal, DealStage } from '../../types';
 import { StageConfig, formatDealValue } from './StageConfig';
 import DealCard from './DealCard';
+
+const PAGE_SIZE = 50;
 
 // ── Sortable card wrapper ─────────────────────────────────────────────────────
 
@@ -40,6 +43,10 @@ interface KanbanColumnProps {
 
 export default function KanbanColumn({ stage, config, deals, onCardClick }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
+  const [showAll, setShowAll] = useState(false);
+
+  const visibleDeals = showAll || deals.length <= PAGE_SIZE ? deals : deals.slice(0, PAGE_SIZE);
+  const hiddenCount  = deals.length - visibleDeals.length;
 
   const totalValue = deals.reduce((s, d) => s + d.estimatedValue, 0);
   const currency   = deals[0]?.currency ?? 'USD';
@@ -78,10 +85,19 @@ export default function KanbanColumn({ stage, config, deals, onCardClick }: Kanb
         }}
       >
         <SortableContext items={deals.map(d => d._id)} strategy={verticalListSortingStrategy}>
-          {deals.map(deal => (
+          {visibleDeals.map(deal => (
             <SortableDealCard key={deal._id} deal={deal} onClick={() => onCardClick(deal)} />
           ))}
         </SortableContext>
+
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setShowAll(true)}
+            className="w-full text-[11px] text-ink-500 hover:text-ink-300 py-1.5 transition-colors"
+          >
+            +{hiddenCount} more
+          </button>
+        )}
 
         {deals.length === 0 && (
           <div className="flex-1 flex items-center justify-center">

@@ -85,7 +85,41 @@ export function useChangeDealStage() {
       lostNote?: string;
     }) =>
       api.patch(`/deals/${dealId}/stage`, { stage, lostReason, lostNote }).then(r => r.data.deal),
-    onSuccess: () => {
+
+    onMutate: async ({ dealId, stage }) => {
+      await qc.cancelQueries({ queryKey: ['deals', 'pipeline'] });
+      const snapshots = qc.getQueriesData<PipelineData>({ queryKey: ['deals', 'pipeline'] });
+
+      qc.setQueriesData<PipelineData>({ queryKey: ['deals', 'pipeline'] }, old => {
+        if (!old) return old;
+        let moved: Deal | undefined;
+        const next = { ...old } as PipelineData;
+        for (const s of Object.keys(next) as DealStage[]) {
+          const idx = next[s]?.findIndex(d => d._id === dealId) ?? -1;
+          if (idx >= 0) {
+            moved = next[s][idx];
+            next[s] = next[s].filter(d => d._id !== dealId);
+            break;
+          }
+        }
+        if (moved) {
+          next[stage] = [{ ...moved, stage }, ...(next[stage] ?? [])];
+        }
+        return next;
+      });
+
+      return { snapshots };
+    },
+
+    onError: (_err, _vars, context) => {
+      if (context?.snapshots) {
+        for (const [key, data] of context.snapshots) {
+          qc.setQueryData(key, data);
+        }
+      }
+    },
+
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: dealKeys.pipeline() });
       qc.invalidateQueries({ queryKey: dealKeys.all });
     },

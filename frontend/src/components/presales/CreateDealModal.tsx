@@ -1,8 +1,12 @@
 import { useState } from 'react';
+import { toast } from 'react-toastify';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { useCreateDeal } from '../../hooks/presales/useDeals';
 import { usePartners }   from '../../hooks/presales/usePartners';
 import { DealContact }   from '../../types';
+
+const MAX_CONTACTS = 5;
+const TODAY = new Date().toISOString().slice(0, 10);
 
 interface CreateDealModalProps {
   open:    boolean;
@@ -71,26 +75,38 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
 
   const [form,     setForm]     = useState(emptyForm());
   const [contacts, setContacts] = useState<DealContact[]>([]);
-  const [error,    setError]    = useState('');
 
   if (!open) return null;
 
   const set = (k: keyof ReturnType<typeof emptyForm>, v: string) =>
     setForm(f => ({ ...f, [k]: v }));
 
-  const addContact    = () => setContacts(cs => [...cs, { name: '', email: '', phone: '', role: '' }]);
+  const addContact = () => {
+    if (contacts.length >= MAX_CONTACTS) {
+      toast.error(`Maximum ${MAX_CONTACTS} contacts allowed per deal.`);
+      return;
+    }
+    setContacts(cs => [...cs, { name: '', email: '', phone: '', role: '' }]);
+  };
   const removeContact = (i: number) => setContacts(cs => cs.filter((_, idx) => idx !== i));
   const updateContact = (i: number, field: keyof DealContact, value: string) =>
     setContacts(cs => cs.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
 
-  const reset = () => { setForm(emptyForm()); setContacts([]); setError(''); };
+  const reset = () => { setForm(emptyForm()); setContacts([]); };
 
   const handleSubmit = async () => {
     if (!form.title.trim() || !form.clientCompany.trim()) {
-      setError('Deal title and client company are required.');
+      toast.error('Deal title and client company are required.');
       return;
     }
-    setError('');
+    if (form.proposedStartDate && form.proposedStartDate < TODAY) {
+      toast.error('Proposed start date cannot be in the past.');
+      return;
+    }
+    if (form.proposedEndDate && form.proposedStartDate && form.proposedEndDate < form.proposedStartDate) {
+      toast.error('Proposed end date cannot be before the start date.');
+      return;
+    }
     try {
       await createDeal.mutateAsync({
         title:         form.title.trim(),
@@ -121,7 +137,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
       reset();
       onClose();
     } catch (err: any) {
-      setError(err?.response?.data?.message ?? 'Failed to create deal. Please try again.');
+      toast.error(err?.response?.data?.message ?? 'Failed to create deal. Please try again.');
     }
   };
 
@@ -159,14 +175,6 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
 
         {/* ── Scrollable body ──────────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {error && (
-            <div
-              className="mb-5 px-4 py-3 rounded-xl text-sm text-red-300"
-              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)' }}
-            >
-              {error}
-            </div>
-          )}
 
           {/* ── 1. Basic Info ─────────────────────────────────────────────── */}
           <div className={SECTION}>
@@ -426,12 +434,14 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
               <div>
                 <label className={LABEL}>Proposed Start</label>
                 <input type="date" value={form.proposedStartDate}
+                  min={TODAY}
                   onChange={e => set('proposedStartDate', e.target.value)}
                   className={INPUT} style={F.base} />
               </div>
               <div>
                 <label className={LABEL}>Proposed End</label>
                 <input type="date" value={form.proposedEndDate}
+                  min={form.proposedStartDate || TODAY}
                   onChange={e => set('proposedEndDate', e.target.value)}
                   className={INPUT} style={F.base} />
               </div>

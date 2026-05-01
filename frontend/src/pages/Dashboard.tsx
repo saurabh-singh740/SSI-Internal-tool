@@ -104,11 +104,6 @@ export default function Dashboard() {
       <Header
         title="Dashboard"
         subtitle="Overview of all projects"
-        actions={
-          <Link to="/projects/create" className="btn-primary text-xs py-1.5 px-3">
-            <Plus className="h-3.5 w-3.5" /> New Project
-          </Link>
-        }
       />
 
       <div className="page-content">
