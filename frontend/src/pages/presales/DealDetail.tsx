@@ -355,26 +355,27 @@ export default function DealDetail() {
       {/* Tabs */}
       <div className="flex gap-1 mb-5 overflow-x-auto no-scrollbar" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         {([
-          { id: 'overview',      label: 'Overview' },
-          { id: 'sow',           label: 'SOW' },
-          { id: 'resourcePlan',  label: 'Resource Plan' },
-          { id: 'attachments',   label: 'Files' },
-          { id: 'activity',      label: 'Activity' },
+          { id: 'overview',     label: 'Overview',       locked: false },
+          { id: 'sow',          label: 'SOW',            locked: isLost },
+          { id: 'resourcePlan', label: 'Resource Plan',  locked: isLost },
+          { id: 'attachments',  label: 'Files',          locked: isLost },
+          { id: 'activity',     label: 'Activity',       locked: false },
         ] as const).map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className="px-4 py-2.5 text-sm font-medium transition-all duration-150 flex items-center gap-1.5 flex-shrink-0"
             style={{
-              color:       activeTab === tab.id ? '#a5b4fc' : '#64748b',
-              borderBottom: activeTab === tab.id ? '2px solid #6366f1' : '2px solid transparent',
+              color:        activeTab === tab.id ? (tab.locked ? '#f87171' : '#a5b4fc') : (tab.locked ? 'rgba(248,113,113,0.45)' : '#64748b'),
+              borderBottom: activeTab === tab.id ? `2px solid ${tab.locked ? '#ef4444' : '#6366f1'}` : '2px solid transparent',
             }}
           >
-            {tab.id === 'attachments'
-              ? <><Paperclip className="w-3.5 h-3.5" />{tab.label}{attachments.length > 0 && ` (${attachments.length})`}</>
-              : tab.id === 'resourcePlan'
-              ? <><Users className="w-3.5 h-3.5" />{tab.label}{planRows.length > 0 && ` (${planRows.length})`}</>
-              : tab.label}
+            {tab.id === 'attachments' && <Paperclip className="w-3.5 h-3.5" />}
+            {tab.id === 'resourcePlan' && <Users className="w-3.5 h-3.5" />}
+            {tab.label}
+            {tab.id === 'attachments' && attachments.length > 0 && ` (${attachments.length})`}
+            {tab.id === 'resourcePlan' && planRows.length > 0 && ` (${planRows.length})`}
+            {tab.locked && <Lock className="w-3 h-3 opacity-70" />}
           </button>
         ))}
       </div>
@@ -452,6 +453,13 @@ export default function DealDetail() {
       {/* Tab: SOW */}
       {activeTab === 'sow' && (
         <div>
+          {isLost && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl mb-4"
+              style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.18)' }}>
+              <Lock className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />
+              <p className="text-xs text-red-400/80">SOW is locked — this deal is closed and cannot be edited.</p>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-ink-300">Statement of Work</h3>
             {!isLost && !editingSow && (
@@ -537,6 +545,13 @@ export default function DealDetail() {
       {/* Tab: Attachments */}
       {activeTab === 'attachments' && (
         <div>
+          {isLost && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl mb-4"
+              style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.18)' }}>
+              <Lock className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />
+              <p className="text-xs text-red-400/80">Files are locked — uploading and deleting is disabled. Existing files can still be downloaded.</p>
+            </div>
+          )}
           {/* Upload bar — hidden when deal is lost */}
           {!isLost && (
             <div className="flex items-center gap-3 mb-5 p-4 rounded-xl"
@@ -643,16 +658,23 @@ export default function DealDetail() {
       {/* Tab: Resource Plan */}
       {activeTab === 'resourcePlan' && (
         <div>
+          {isLost && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl mb-4"
+              style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.18)' }}>
+              <Lock className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />
+              <p className="text-xs text-red-400/80">Resource plan is locked — engineers cannot be added or removed on a closed deal.</p>
+            </div>
+          )}
           {/* Header row */}
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-semibold text-ink-300">Resource Plan</h3>
-              <p className="text-xs text-ink-600 mt-0.5">
-                {isLost
-                  ? <span className="text-red-400/70 flex items-center gap-1"><Lock className="h-3 w-3" /> Read only — deal is closed</span>
-                  : <>Projection updates automatically as you edit{previewLoading && <span className="ml-2 text-indigo-400 animate-pulse">· calculating…</span>}</>
-                }
-              </p>
+              {!isLost && (
+                <p className="text-xs text-ink-600 mt-0.5">
+                  Projection updates automatically as you edit
+                  {previewLoading && <span className="ml-2 text-indigo-400 animate-pulse">· calculating…</span>}
+                </p>
+              )}
             </div>
             {!isLost && (
               <div className="flex gap-2">

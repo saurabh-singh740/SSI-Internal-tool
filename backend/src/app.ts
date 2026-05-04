@@ -160,13 +160,32 @@ console.log('[static] PUBLIC_DIR :', __dirname, '../public');
 console.log('[static] dir exists :', fs.existsSync(path.join(__dirname, '../public')));
 console.log('[static] index.html :', fs.existsSync(path.join(__dirname, '../public/index.html')));
 
-// Serve hashed JS/CSS/image assets with aggressive cache headers.
-app.use(express.static(path.join(__dirname,'../public')));
+// Vite emits all JS/CSS/image assets into /assets/ with content-hash filenames.
+// These can be cached forever — if the content changes the filename changes too.
+app.use(
+  '/assets',
+  express.static(path.join(__dirname, '../public/assets'), {
+    maxAge:    '1y',
+    immutable: true,
+  }),
+);
 
-// SPA fallback — every non-API GET returns index.html so React Router
-// handles client-side navigation (e.g. hard-refresh on /admin/dashboard).
+// All other static files (favicon, robots.txt, manifest, etc.) — short cache.
+app.use(
+  express.static(path.join(__dirname, '../public'), {
+    maxAge: '1h',
+    index:  false,  // Never auto-serve index.html — handled explicitly below
+  }),
+);
+
+// SPA fallback — index.html must NEVER be cached so the browser always gets
+// the latest asset filenames after a deploy.
 app.get('*', (_req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  res
+    .setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    .setHeader('Pragma', 'no-cache')
+    .setHeader('Expires', '0')
+    .sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 // ── Global error handler (must be registered last) ───────────────────────────
