@@ -1,11 +1,14 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Lock, Unlock, Download, Loader2, CheckCircle, AlertTriangle } from 'lucide-react';
+import { toast } from 'react-toastify';
 import { clsx } from 'clsx';
 import api from '../../api/axios';
 import { MonthSheet as MonthSheetType, TimesheetEntry } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+
+const MAX_HOURS_PER_DAY = 8;
 
 interface Props {
   month: MonthSheetType;
@@ -41,6 +44,10 @@ export default function MonthSheet({
   const [saving, setSaving] = useState<string | null>(null); // entryId being saved
   const [locking, setLocking] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [entryErrors, setEntryErrors] = useState<Record<string, string>>({});
+
+  // Tracks the last API-confirmed state for each entry so we can revert on save failure.
+  const confirmedEntriesRef = useRef<TimesheetEntry[]>(month.entries);
 
   // Pre-processed logo canvas — white pixels stripped so the logo blends on
   // any coloured PDF background without a visible white rectangle.
@@ -56,6 +63,8 @@ export default function MonthSheet({
     setLocalWeeklyTotals(month.weeklyTotals);
     setLocalMonthlyTotal(month.monthlyTotal);
     setLocalRemaining(month.authorizedHoursRemainingAfterMonth);
+    confirmedEntriesRef.current = month.entries;
+    setEntryErrors({});
   }, [month]);
 
   // Load 2.jpg, strip its white background on an off-screen 2× canvas, and
@@ -133,7 +142,7 @@ export default function MonthSheet({
     return { weekly, monthly };
   }, []);
 
-  // ── Optimistic field update ───────────────────────────────────────────────────
+  // ── Optimistic field update with inline validation ────────────────────────────
   const handleChange = (
     entryId: string,
     field: 'projectWork' | 'hours' | 'minutes' | 'remarks',
@@ -146,6 +155,27 @@ export default function MonthSheet({
         next.totalHours = Math.round((next.hours + next.minutes / 60) * 100) / 100;
         return next;
       });
+
+      // Validate numeric fields: total must not exceed 8 h/day
+      if (field === 'hours' || field === 'minutes') {
+        const entry = updated.find(e => e._id === entryId);
+        if (entry) {
+          const total = entry.hours + entry.minutes / 60;
+          if (total > MAX_HOURS_PER_DAY + 1e-9) {
+            setEntryErrors(prev => ({
+              ...prev,
+              [entryId]: `Max ${MAX_HOURS_PER_DAY} hrs/day (${total.toFixed(2)}h entered)`,
+            }));
+          } else {
+            setEntryErrors(prev => {
+              const copy = { ...prev };
+              delete copy[entryId];
+              return copy;
+            });
+          }
+        }
+      }
+
       const { weekly, monthly } = recomputeLocal(updated);
       setLocalWeeklyTotals(weekly);
       setLocalMonthlyTotal(monthly);
@@ -168,21 +198,60 @@ export default function MonthSheet({
   // ── Save entry on blur ────────────────────────────────────────────────────────
   const handleBlur = async (entry: TimesheetEntry) => {
     if (!canEdit) return;
-    if (isOutOfProjectRange(entry.date)) return;
+
+    const outOfRange = isOutOfProjectRange(entry.date);
+    if (outOfRange) {
+      toast.error(
+        outOfRange === 'before'
+          ? `Cannot log hours before the project start date.`
+          : `Cannot log hours after the project end date.`
+      );
+      return;
+    }
+
+    // Block save when inline validation has flagged this entry
+    if (entryErrors[entry._id]) {
+      toast.error(entryErrors[entry._id]);
+      return;
+    }
+
     setSaving(entry._id);
     try {
       const res = await api.patch(
         `/timesheets/${projectId}/${engineerId}/${year}/${month.monthIndex}/entries/${entry._id}`,
         {
           projectWork: entry.projectWork,
-          hours: entry.hours,
-          minutes: entry.minutes,
-          remarks: entry.remarks,
+          hours:       entry.hours,
+          minutes:     entry.minutes,
+          remarks:     entry.remarks,
         }
       );
+      // Update confirmed snapshot so future reverts use this saved state
+      confirmedEntriesRef.current = res.data.month.entries;
       onUpdate(res.data.month);
-    } catch (err) {
-      console.error('Failed to save entry', err);
+    } catch (err: any) {
+      const msg: string =
+        err?.response?.data?.message || 'Failed to save. Please try again.';
+      toast.error(msg);
+
+      // Revert the optimistic update back to the last confirmed saved state
+      const confirmedEntry = confirmedEntriesRef.current.find(e => e._id === entry._id);
+      if (confirmedEntry) {
+        setLocalEntries(prev => {
+          const reverted = prev.map(e => e._id === entry._id ? { ...confirmedEntry } : e);
+          const { weekly, monthly } = recomputeLocal(reverted);
+          setLocalWeeklyTotals(weekly);
+          setLocalMonthlyTotal(monthly);
+          setLocalRemaining(Math.round(Math.max(0, totalAuthorizedHours - monthly) * 100) / 100);
+          return reverted;
+        });
+        // Clear the error badge (value was reverted to a valid state)
+        setEntryErrors(prev => {
+          const copy = { ...prev };
+          delete copy[entry._id];
+          return copy;
+        });
+      }
     } finally {
       setSaving(null);
     }
@@ -834,11 +903,16 @@ export default function MonthSheet({
                             <input
                               id={`entry-hours-${entry._id}`}
                               name={`entry-hours-${entry._id}`}
-                              type="number" min="0" max="23"
+                              type="number" min="0" max={MAX_HOURS_PER_DAY}
                               value={entry.hours || ''}
                               onChange={e => handleChange(entry._id, 'hours', e.target.value)}
                               onBlur={() => handleBlur(entry)}
-                              className="w-full px-3 py-1.5 bg-transparent text-white text-center focus:outline-none focus:bg-white/5 focus:ring-1 focus:ring-inset focus:ring-indigo-500/50 transition-all duration-150"
+                              className={clsx(
+                                'w-full px-3 py-1.5 bg-transparent text-center focus:outline-none focus:bg-white/5 focus:ring-1 focus:ring-inset transition-all duration-150',
+                                entryErrors[entry._id]
+                                  ? 'text-red-400 focus:ring-red-500/50'
+                                  : 'text-white focus:ring-indigo-500/50'
+                              )}
                             />
                           ) : (
                             <span className="block px-3 py-1.5 text-center text-gray-300">{entry.hours || <span className="text-gray-700">—</span>}</span>
@@ -859,14 +933,21 @@ export default function MonthSheet({
                             <span className="block px-3 py-1.5 text-center text-gray-300">{entry.minutes || <span className="text-gray-700">—</span>}</span>
                           )}
                         </td>
-                        <td className={clsx(
-                          'border-r border-white/5 px-3 py-1.5 text-center tabular-nums font-semibold',
-                          entry.totalHours > 0 ? 'text-emerald-400' : 'text-gray-700'
-                        )}>
-                          {entry.totalHours > 0 ? fmtHours(entry.totalHours) : '—'}
-                          {isSaving && <Loader2 className="h-3 w-3 animate-spin inline ml-1 text-indigo-400" />}
-                          {!isSaving && entry.totalHours > 0 && (
-                            <CheckCircle className="h-3 w-3 inline ml-1 text-emerald-500/60 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <td className="border-r border-white/5 px-3 py-1.5 text-center tabular-nums">
+                          {isSaving ? (
+                            <Loader2 className="h-3 w-3 animate-spin inline text-indigo-400" />
+                          ) : entryErrors[entry._id] ? (
+                            <span className="inline-flex items-center gap-0.5 text-red-400 text-[10px] font-medium">
+                              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                              Max 8h
+                            </span>
+                          ) : entry.totalHours > 0 ? (
+                            <span className="font-semibold text-emerald-400">
+                              {fmtHours(entry.totalHours)}
+                              <CheckCircle className="h-3 w-3 inline ml-1 text-emerald-500/60 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </span>
+                          ) : (
+                            <span className="text-gray-700">—</span>
                           )}
                         </td>
                         <td className="p-0">
