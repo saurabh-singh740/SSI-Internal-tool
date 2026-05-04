@@ -18,7 +18,7 @@ const STAGE_TRANSITIONS: Record<DealStage, DealStage[]> = {
   PROPOSAL:    ['NEGOTIATION', 'LOST'],
   NEGOTIATION: ['WON', 'LOST'],
   WON:         [],
-  LOST:        ['LEAD'],
+  LOST:        [],
 };
 
 // Auto win-probability per stage
@@ -156,6 +156,9 @@ export class DealService {
     }
     const deal = await Deal.findById(dealId);
     if (!deal) throw Object.assign(new Error('Deal not found'), { statusCode: 404 });
+    if (deal.stage === 'LOST') {
+      throw Object.assign(new Error('Cannot modify a lost deal'), { statusCode: 400 });
+    }
 
     // Track value changes for the activity log
     const changed: Array<{ field: string; oldValue: unknown; newValue: unknown }> = [];
@@ -256,6 +259,11 @@ export class DealService {
   // ── Update SOW ──────────────────────────────────────────────────────────────
 
   async updateSOW(dealId: string, sowSections: IDeal['sowSections'], actorId: string) {
+    const existing = await Deal.findById(dealId);
+    if (!existing) throw Object.assign(new Error('Deal not found'), { statusCode: 404 });
+    if (existing.stage === 'LOST') {
+      throw Object.assign(new Error('Cannot modify a lost deal'), { statusCode: 400 });
+    }
     const deal = await Deal.findByIdAndUpdate(
       dealId,
       { sowSections },

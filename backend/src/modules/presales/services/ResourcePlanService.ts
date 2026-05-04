@@ -31,6 +31,9 @@ export async function saveResourcePlan(
 ): Promise<IResourcePlanEntry[]> {
   const deal = await Deal.findById(dealId);
   if (!deal) throw Object.assign(new Error('Deal not found'), { statusCode: 404 });
+  if (deal.stage === 'LOST') {
+    throw Object.assign(new Error('Cannot modify a lost deal'), { statusCode: 400 });
+  }
 
   // Validate all engineers exist and have ENGINEER role
   const engineerIds = [...new Set(entries.map(e => e.engineer))];

@@ -3,11 +3,12 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft, ChevronRight, Edit2, Check, X,
   Plus, Trash2, GitBranch, ExternalLink, MessageSquare,
-  TrendingUp, Clock, Paperclip, Upload, Download, FileText, Image,
-  Users, Save,
+  Clock, Paperclip, Upload, Download, FileText, Image,
+  Users, Save, Lock, AlertTriangle,
 } from 'lucide-react';
+import { toast } from 'react-toastify';
 import { format } from 'date-fns';
-import { useDeal, useDealActivities, useChangeDealStage, useAddNote, useUpdateSOW, useUpdateDeal } from '../../hooks/presales/useDeals';
+import { useDeal, useDealActivities, useChangeDealStage, useAddNote, useUpdateSOW, useUpdateDeal, useDeleteDeal } from '../../hooks/presales/useDeals';
 import { useAttachments, useUploadAttachment, useDeleteAttachment } from '../../hooks/presales/useAttachments';
 import { useEngineers, useSaveResourcePlan, useLiveTimesheetPreview, ResourcePlanEntryInput } from '../../hooks/presales/useResourcePlan';
 import { STAGE_ORDER, STAGE_CONFIG, formatDealValue } from '../../components/presales/StageConfig';
@@ -24,7 +25,7 @@ const ALLOWED_TRANSITIONS: Record<DealStage, DealStage[]> = {
   PROPOSAL:    ['NEGOTIATION', 'LOST'],
   NEGOTIATION: ['WON', 'LOST'],
   WON:         [],
-  LOST:        ['LEAD'],
+  LOST:        [],
 };
 
 function userName(u: User | string | undefined): string {
@@ -77,6 +78,7 @@ export default function DealDetail() {
   const addNote       = useAddNote(id!);
   const updateSOW     = useUpdateSOW(id!);
   const updateDeal    = useUpdateDeal(id!);
+  const deleteDeal    = useDeleteDeal();
 
   const [showConvert,   setShowConvert]   = useState(false);
   const [showLost,      setShowLost]      = useState(false);
@@ -139,6 +141,18 @@ export default function DealDetail() {
   const convertedProject = typeof deal.convertedProjectId === 'object' ? deal.convertedProjectId : null;
   const nextStages   = ALLOWED_TRANSITIONS[deal.stage] ?? [];
   const canConvert   = deal.stage === 'WON' && !isConverted && user?.role === 'ADMIN';
+  const isLost       = deal.stage === 'LOST';
+
+  const handleDeleteDeal = async () => {
+    if (!window.confirm(`Permanently delete "${deal.title}"? This cannot be undone.`)) return;
+    try {
+      await deleteDeal.mutateAsync(deal._id);
+      toast.success('Deal deleted.');
+      navigate('/presales');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to delete deal.');
+    }
+  };
 
   // ── Stage transition ────────────────────────────────────────────────────────
 
@@ -245,8 +259,39 @@ export default function DealDetail() {
               {typeof convertedProject === 'object' ? convertedProject.code : 'View Project'}
             </Link>
           )}
+          {isLost && user?.role === 'ADMIN' && (
+            <button
+              onClick={handleDeleteDeal}
+              disabled={deleteDeal.isPending}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 disabled:opacity-50"
+              style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171', border: '1px solid rgba(248,113,113,0.25)' }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {deleteDeal.isPending ? 'Deleting…' : 'Delete Deal'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* LOST banner */}
+      {isLost && (
+        <div
+          className="flex items-center gap-3 px-4 py-3 rounded-xl mb-5"
+          style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)' }}
+        >
+          <Lock className="h-4 w-4 text-red-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-red-400">Deal Closed — Read Only</p>
+            <p className="text-xs text-ink-500 mt-0.5">This deal was marked as lost. No further changes can be made. Admins can delete it permanently.</p>
+          </div>
+          {deal.lostReason && (
+            <span className="text-xs font-medium px-2 py-1 rounded-lg flex-shrink-0"
+              style={{ background: 'rgba(248,113,113,0.15)', color: '#fca5a5' }}>
+              {deal.lostReason.replace(/_/g, ' ')}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Stage pipeline breadcrumb */}
       <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-1">
@@ -254,7 +299,7 @@ export default function DealDetail() {
           const cfg      = STAGE_CONFIG[stage];
           const isCurrent = deal.stage === stage;
           const isPast    = STAGE_ORDER.indexOf(deal.stage) > i && deal.stage !== 'LOST';
-          const isNext    = nextStages.includes(stage) && stage !== 'LOST';
+          const isNext    = !isLost && nextStages.includes(stage) && stage !== 'LOST';
           return (
             <div key={stage} className="flex items-center gap-1 flex-shrink-0">
               <button
@@ -266,6 +311,7 @@ export default function DealDetail() {
                   color:       isCurrent ? cfg.color : isPast ? '#64748b' : isNext ? '#94a3b8' : '#475569',
                   border:      `1px solid ${isCurrent ? cfg.color + '40' : 'rgba(255,255,255,0.05)'}`,
                   cursor:      isNext ? 'pointer' : 'default',
+                  opacity:     isLost ? 0.5 : 1,
                 }}
               >
                 {isPast && <Check className="h-3 w-3" />}
@@ -277,8 +323,8 @@ export default function DealDetail() {
             </div>
           );
         })}
-        {/* Lost button */}
-        {nextStages.includes('LOST') && deal.stage !== 'LOST' && (
+        {/* Lost button — only shown when deal is active */}
+        {!isLost && nextStages.includes('LOST') && (
           <button
             onClick={() => handleStageClick('LOST')}
             disabled={changeStage.isPending}
@@ -408,7 +454,7 @@ export default function DealDetail() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-ink-300">Statement of Work</h3>
-            {!editingSow ? (
+            {!isLost && !editingSow && (
               <button
                 onClick={startEditSow}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-ink-400 hover:text-ink-100 transition-all"
@@ -416,7 +462,8 @@ export default function DealDetail() {
               >
                 <Edit2 className="h-3 w-3" /> Edit SOW
               </button>
-            ) : (
+            )}
+            {!isLost && editingSow && (
               <div className="flex gap-2">
                 <button onClick={() => setEditingSow(false)} className="px-3 py-1.5 rounded-lg text-xs text-ink-400 hover:text-ink-100 transition-all" style={{ background: 'rgba(255,255,255,0.05)' }}>
                   Cancel
@@ -443,9 +490,11 @@ export default function DealDetail() {
             ) : (
               <div className="text-center py-12">
                 <p className="text-sm text-ink-500 mb-3">No SOW sections yet</p>
-                <button onClick={startEditSow} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
-                  + Add SOW
-                </button>
+                {!isLost && (
+                  <button onClick={startEditSow} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
+                    + Add SOW
+                  </button>
+                )}
               </div>
             )
           ) : (
@@ -488,44 +537,46 @@ export default function DealDetail() {
       {/* Tab: Attachments */}
       {activeTab === 'attachments' && (
         <div>
-          {/* Upload bar */}
-          <div className="flex items-center gap-3 mb-5 p-4 rounded-xl"
-               style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-            <select
-              value={uploadCategory}
-              onChange={e => setUploadCategory(e.target.value as AttachmentCategory)}
-              className="px-2 py-1.5 rounded-lg text-xs text-ink-300"
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
-            >
-              <option value="OTHER">Other</option>
-              <option value="SOW">SOW</option>
-              <option value="PROPOSAL">Proposal</option>
-              <option value="CONTRACT">Contract</option>
-              <option value="CLIENT_DOCUMENT">Client Document</option>
-            </select>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadMutation.isPending}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
-              style={{ background: 'rgba(99,102,241,0.8)' }}
-            >
-              <Upload className="w-3.5 h-3.5" />
-              {uploadMutation.isPending ? 'Uploading…' : 'Upload File'}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.txt"
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                uploadMutation.mutate({ file, category: uploadCategory });
-                e.target.value = '';
-              }}
-            />
-            <span className="text-xs text-ink-600 ml-auto">PDF, DOCX, XLSX, JPEG, PNG — max 20 MB</span>
-          </div>
+          {/* Upload bar — hidden when deal is lost */}
+          {!isLost && (
+            <div className="flex items-center gap-3 mb-5 p-4 rounded-xl"
+                 style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <select
+                value={uploadCategory}
+                onChange={e => setUploadCategory(e.target.value as AttachmentCategory)}
+                className="px-2 py-1.5 rounded-lg text-xs text-ink-300"
+                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
+              >
+                <option value="OTHER">Other</option>
+                <option value="SOW">SOW</option>
+                <option value="PROPOSAL">Proposal</option>
+                <option value="CONTRACT">Contract</option>
+                <option value="CLIENT_DOCUMENT">Client Document</option>
+              </select>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadMutation.isPending}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
+                style={{ background: 'rgba(99,102,241,0.8)' }}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                {uploadMutation.isPending ? 'Uploading…' : 'Upload File'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.txt"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  uploadMutation.mutate({ file, category: uploadCategory });
+                  e.target.value = '';
+                }}
+              />
+              <span className="text-xs text-ink-600 ml-auto">PDF, DOCX, XLSX, JPEG, PNG — max 20 MB</span>
+            </div>
+          )}
 
           {/* List */}
           {attachments.length === 0 ? (
@@ -568,17 +619,19 @@ export default function DealDetail() {
                     >
                       <Download className="w-3.5 h-3.5" />
                     </a>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Delete ${att.originalName}?`)) {
-                          deleteAttachment.mutate(att._id);
-                        }
-                      }}
-                      className="p-1.5 rounded-lg text-ink-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {!isLost && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Delete ${att.originalName}?`)) {
+                            deleteAttachment.mutate(att._id);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg text-ink-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -595,28 +648,32 @@ export default function DealDetail() {
             <div>
               <h3 className="text-sm font-semibold text-ink-300">Resource Plan</h3>
               <p className="text-xs text-ink-600 mt-0.5">
-                Projection updates automatically as you edit
-                {previewLoading && <span className="ml-2 text-indigo-400 animate-pulse">· calculating…</span>}
+                {isLost
+                  ? <span className="text-red-400/70 flex items-center gap-1"><Lock className="h-3 w-3" /> Read only — deal is closed</span>
+                  : <>Projection updates automatically as you edit{previewLoading && <span className="ml-2 text-indigo-400 animate-pulse">· calculating…</span>}</>
+                }
               </p>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={addPlanRow}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-ink-300 hover:text-ink-100 transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
-              >
-                <Plus className="h-3 w-3" /> Add Engineer
-              </button>
-              <button
-                onClick={() => saveResourcePlan.mutate(planRows.filter(r => r.engineer))}
-                disabled={saveResourcePlan.isPending}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all"
-                style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}
-              >
-                <Save className="h-3 w-3" />
-                {saveResourcePlan.isPending ? 'Saving…' : 'Save Plan'}
-              </button>
-            </div>
+            {!isLost && (
+              <div className="flex gap-2">
+                <button
+                  onClick={addPlanRow}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-ink-300 hover:text-ink-100 transition-all"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                >
+                  <Plus className="h-3 w-3" /> Add Engineer
+                </button>
+                <button
+                  onClick={() => saveResourcePlan.mutate(planRows.filter(r => r.engineer))}
+                  disabled={saveResourcePlan.isPending}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all"
+                  style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}
+                >
+                  <Save className="h-3 w-3" />
+                  {saveResourcePlan.isPending ? 'Saving…' : 'Save Plan'}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Assignment rows */}
@@ -625,9 +682,11 @@ export default function DealDetail() {
                  style={{ border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px' }}>
               <Users className="w-8 h-8 mb-2 opacity-30" />
               <p className="text-sm mb-2">No engineers assigned yet</p>
-              <button onClick={addPlanRow} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
-                + Add first engineer
-              </button>
+              {!isLost && (
+                <button onClick={addPlanRow} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
+                  + Add first engineer
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-2 mb-6">
@@ -648,7 +707,8 @@ export default function DealDetail() {
                   <select
                     value={row.engineer}
                     onChange={e => updatePlanRow(i, { engineer: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200"
+                    disabled={isLost}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200 disabled:opacity-60"
                     style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
                   >
                     <option value="">Select engineer…</option>
@@ -661,7 +721,8 @@ export default function DealDetail() {
                   <select
                     value={row.role}
                     onChange={e => updatePlanRow(i, { role: e.target.value as EngineerRole })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200"
+                    disabled={isLost}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200 disabled:opacity-60"
                     style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
                   >
                     <option value="LEAD_ENGINEER">Lead</option>
@@ -676,7 +737,8 @@ export default function DealDetail() {
                     max={100}
                     value={row.allocationPercentage}
                     onChange={e => updatePlanRow(i, { allocationPercentage: Number(e.target.value) })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200"
+                    disabled={isLost}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200 disabled:opacity-60"
                     style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}
                   />
 
@@ -685,7 +747,8 @@ export default function DealDetail() {
                     type="date"
                     value={row.startDate?.slice(0, 10) ?? ''}
                     onChange={e => updatePlanRow(i, { startDate: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200"
+                    disabled={isLost}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200 disabled:opacity-60"
                     style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', colorScheme: 'dark' }}
                   />
 
@@ -694,14 +757,19 @@ export default function DealDetail() {
                     type="date"
                     value={row.endDate?.slice(0, 10) ?? ''}
                     onChange={e => updatePlanRow(i, { endDate: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200"
+                    disabled={isLost}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-ink-200 disabled:opacity-60"
                     style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', colorScheme: 'dark' }}
                   />
 
-                  {/* Remove */}
-                  <button onClick={() => removePlanRow(i)} className="text-ink-600 hover:text-red-400 transition-colors p-1">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {/* Remove — hidden when deal is lost */}
+                  {!isLost ? (
+                    <button onClick={() => removePlanRow(i)} className="text-ink-600 hover:text-red-400 transition-colors p-1">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  ) : (
+                    <div className="p-1" />
+                  )}
                 </div>
               ))}
             </div>

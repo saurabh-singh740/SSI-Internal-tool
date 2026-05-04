@@ -26,9 +26,12 @@ export async function uploadAttachment(req: Request, res: Response, next: NextFu
     const dealId = req.params.id;
     const actor  = (req as any).user as { id: string };
 
-    // Verify deal exists
+    // Verify deal exists and is not closed
     const deal = await Deal.findById(dealId).lean();
     if (!deal) return res.status(404).json({ success: false, message: 'Deal not found' });
+    if ((deal as any).stage === 'LOST') {
+      return res.status(400).json({ success: false, message: 'Cannot upload files to a lost deal' });
+    }
 
     // multer puts the file on req.file
     const file = (req as any).file as Express.Multer.File | undefined;
