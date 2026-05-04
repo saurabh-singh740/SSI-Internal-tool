@@ -13,13 +13,18 @@ interface CreateDealModalProps {
   onClose: () => void;
 }
 
-const F = {
-  base: {
-    background: 'rgba(255,255,255,0.04)',
-    border:     '1px solid rgba(255,255,255,0.08)',
-    outline:    'none',
-    color:      '#e2e8f0',
-  } as React.CSSProperties,
+const F_BASE: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.04)',
+  border:     '1px solid rgba(255,255,255,0.08)',
+  outline:    'none',
+  color:      '#e2e8f0',
+};
+
+const F_ERR: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.04)',
+  border:     '1px solid rgba(248,113,113,0.65)',
+  outline:    'none',
+  color:      '#e2e8f0',
 };
 
 const SECTION = 'mb-6';
@@ -37,49 +42,91 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 const emptyForm = () => ({
-  // Basic
-  title:         '',
-  priority:      'MEDIUM',
-  tags:          '',           // comma-separated input → split on submit
-
-  // Client
-  clientCompany: '',
-  clientDomain:  '',
-
-  // Source
-  source:        '',
-  referredBy:    '',
-
-  // Commercial
-  estimatedValue: '',
-  currency:       'USD',
-  estimatedHours: '',
-  proposedRate:   '',
-  billingType:    '',
-
-  // Timeline
-  expectedCloseDate:  '',
-  proposedStartDate:  '',
-  proposedEndDate:    '',
-
-  // Win probability
-  winProbability: '10',
-
-  // Partner
-  partnerId: '',
+  title:            '',
+  priority:         'MEDIUM',
+  tags:             '',
+  clientCompany:    '',
+  clientDomain:     '',
+  source:           '',
+  referredBy:       '',
+  estimatedValue:   '',
+  currency:         'USD',
+  estimatedHours:   '',
+  proposedRate:     '',
+  billingType:      '',
+  expectedCloseDate: '',
+  proposedStartDate: '',
+  proposedEndDate:   '',
+  winProbability:    '10',
+  partnerId:         '',
 });
+
+type FormKey = keyof ReturnType<typeof emptyForm>;
+
+function validate(form: ReturnType<typeof emptyForm>): Record<string, string> {
+  const e: Record<string, string> = {};
+
+  if (!form.title.trim())         e.title         = 'Required';
+  if (!form.clientCompany.trim()) e.clientCompany = 'Required';
+  if (!form.source)               e.source        = 'Required';
+  if (!form.billingType)          e.billingType   = 'Required';
+  if (!form.partnerId)            e.partnerId     = 'Required';
+
+  if (!form.estimatedValue || parseFloat(form.estimatedValue) <= 0)
+    e.estimatedValue = 'Required';
+  if (!form.estimatedHours || parseFloat(form.estimatedHours) <= 0)
+    e.estimatedHours = 'Required';
+  if (!form.proposedRate || parseFloat(form.proposedRate) <= 0)
+    e.proposedRate = 'Required';
+
+  if (!form.expectedCloseDate)  e.expectedCloseDate = 'Required';
+  if (!form.proposedStartDate)  e.proposedStartDate = 'Required';
+  if (!form.proposedEndDate)    e.proposedEndDate   = 'Required';
+
+  if (form.proposedStartDate && form.proposedStartDate < TODAY)
+    e.proposedStartDate = 'Cannot be in the past';
+  if (form.proposedEndDate && form.proposedStartDate && form.proposedEndDate < form.proposedStartDate)
+    e.proposedEndDate = 'Cannot be before start date';
+
+  return e;
+}
 
 export default function CreateDealModal({ open, onClose }: CreateDealModalProps) {
   const createDeal              = useCreateDeal();
   const { data: partners = [] } = usePartners({ isActive: true });
 
-  const [form,     setForm]     = useState(emptyForm());
-  const [contacts, setContacts] = useState<DealContact[]>([]);
+  const [form,        setForm]        = useState(emptyForm());
+  const [contacts,    setContacts]    = useState<DealContact[]>([]);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   if (!open) return null;
 
-  const set = (k: keyof ReturnType<typeof emptyForm>, v: string) =>
+  const set = (k: FormKey, v: string) => {
     setForm(f => ({ ...f, [k]: v }));
+    setFieldErrors(e => { const n = { ...e }; delete n[k]; return n; });
+  };
+
+  // Returns style with red border if field has an error
+  const fs = (field: string): React.CSSProperties =>
+    fieldErrors[field] ? F_ERR : F_BASE;
+
+  // Label with optional required star and red dot on error
+  function Lbl({ field, children, req }: { field: string; children: React.ReactNode; req?: boolean }) {
+    const err = fieldErrors[field];
+    return (
+      <label className={LABEL}>
+        {children}
+        {req && <span className="text-red-400 ml-0.5">*</span>}
+        {err && (
+          <span
+            className="inline-block ml-1.5 h-2 w-2 rounded-full align-middle flex-shrink-0"
+            style={{ background: '#ef4444', boxShadow: '0 0 4px #ef4444' }}
+            title={err}
+          />
+        )}
+      </label>
+    );
+  }
 
   const addContact = () => {
     if (contacts.length >= MAX_CONTACTS) {
@@ -92,19 +139,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
   const updateContact = (i: number, field: keyof DealContact, value: string) =>
     setContacts(cs => cs.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
 
-  const reset = () => { setForm(emptyForm()); setContacts([]); };
+  const reset = () => { setForm(emptyForm()); setContacts([]); setFieldErrors({}); };
 
   const handleSubmit = async () => {
-    if (!form.title.trim() || !form.clientCompany.trim()) {
-      toast.error('Deal title and client company are required.');
-      return;
-    }
-    if (form.proposedStartDate && form.proposedStartDate < TODAY) {
-      toast.error('Proposed start date cannot be in the past.');
-      return;
-    }
-    if (form.proposedEndDate && form.proposedStartDate && form.proposedEndDate < form.proposedStartDate) {
-      toast.error('Proposed end date cannot be before the start date.');
+    const errs = validate(form);
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      toast.error('Please fill in all required fields (marked with red dot).');
       return;
     }
     try {
@@ -112,25 +153,19 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
         title:         form.title.trim(),
         priority:      form.priority as any,
         tags:          form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-
         clientCompany: form.clientCompany.trim(),
         clientDomain:  form.clientDomain.trim()  || undefined,
-
         source:        form.source     || undefined,
         referredBy:    form.referredBy.trim() || undefined,
-
         estimatedValue: parseFloat(form.estimatedValue) || 0,
         currency:       form.currency as any,
         estimatedHours: form.estimatedHours ? parseFloat(form.estimatedHours) : undefined,
         proposedRate:   form.proposedRate   ? parseFloat(form.proposedRate)   : undefined,
         billingType:    form.billingType    || undefined,
-
         expectedCloseDate: form.expectedCloseDate || undefined,
         proposedStartDate: form.proposedStartDate || undefined,
         proposedEndDate:   form.proposedEndDate   || undefined,
-
         winProbability: parseInt(form.winProbability) || 10,
-
         contacts:  contacts.filter(c => c.name.trim()),
         partnerId: form.partnerId || undefined,
       } as any);
@@ -150,9 +185,9 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
       <div
         className="relative w-full max-w-2xl rounded-2xl z-10 flex flex-col"
         style={{
-          background:  'rgba(10,12,28,0.99)',
-          border:      '1px solid rgba(255,255,255,0.1)',
-          maxHeight:   '92vh',
+          background: 'rgba(10,12,28,0.99)',
+          border:     '1px solid rgba(255,255,255,0.1)',
+          maxHeight:  '92vh',
         }}
       >
         {/* ── Sticky header ───────────────────────────────────────────────── */}
@@ -183,13 +218,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
             <div className="space-y-3">
               {/* Title */}
               <div>
-                <label className={LABEL}>Deal Title <span className="text-red-400">*</span></label>
+                <Lbl field="title" req>Deal Title</Lbl>
                 <input
                   value={form.title}
                   onChange={e => set('title', e.target.value)}
                   placeholder="e.g. E-commerce Platform for Acme Corp"
                   className={INPUT}
-                  style={F.base}
+                  style={fs('title')}
                 />
               </div>
 
@@ -198,7 +233,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                 <div>
                   <label className={LABEL}>Priority</label>
                   <select value={form.priority} onChange={e => set('priority', e.target.value)}
-                    className={SELECT} style={F.base}>
+                    className={SELECT} style={F_BASE}>
                     <option value="LOW">Low</option>
                     <option value="MEDIUM">Medium</option>
                     <option value="HIGH">High</option>
@@ -208,10 +243,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                 <div>
                   <label className={LABEL}>Win Probability — <span className="text-brand-400">{probVal}%</span></label>
                   <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
+                    type="range" min="0" max="100" step="5"
                     value={form.winProbability}
                     onChange={e => set('winProbability', e.target.value)}
                     className="w-full mt-2 accent-indigo-500"
@@ -227,7 +259,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                   onChange={e => set('tags', e.target.value)}
                   placeholder="e.g. enterprise, fintech, high-value"
                   className={INPUT}
-                  style={F.base}
+                  style={F_BASE}
                 />
               </div>
             </div>
@@ -240,13 +272,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={LABEL}>Company Name <span className="text-red-400">*</span></label>
+                  <Lbl field="clientCompany" req>Company Name</Lbl>
                   <input
                     value={form.clientCompany}
                     onChange={e => set('clientCompany', e.target.value)}
                     placeholder="Acme Corp"
                     className={INPUT}
-                    style={F.base}
+                    style={fs('clientCompany')}
                   />
                 </div>
                 <div>
@@ -256,7 +288,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                     onChange={e => set('clientDomain', e.target.value)}
                     placeholder="acmecorp.com"
                     className={INPUT}
-                    style={F.base}
+                    style={F_BASE}
                   />
                 </div>
               </div>
@@ -292,13 +324,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <input value={c.name} onChange={e => updateContact(i, 'name', e.target.value)}
-                          placeholder="Full name *" className="px-2.5 py-1.5 rounded-lg text-xs" style={F.base} />
+                          placeholder="Full name *" className="px-2.5 py-1.5 rounded-lg text-xs" style={F_BASE} />
                         <input value={c.role ?? ''} onChange={e => updateContact(i, 'role', e.target.value)}
-                          placeholder="Title / Role" className="px-2.5 py-1.5 rounded-lg text-xs" style={F.base} />
+                          placeholder="Title / Role" className="px-2.5 py-1.5 rounded-lg text-xs" style={F_BASE} />
                         <input type="email" value={c.email ?? ''} onChange={e => updateContact(i, 'email', e.target.value)}
-                          placeholder="Email" className="px-2.5 py-1.5 rounded-lg text-xs" style={F.base} />
+                          placeholder="Email" className="px-2.5 py-1.5 rounded-lg text-xs" style={F_BASE} />
                         <input value={c.phone ?? ''} onChange={e => updateContact(i, 'phone', e.target.value)}
-                          placeholder="Phone" className="px-2.5 py-1.5 rounded-lg text-xs" style={F.base} />
+                          placeholder="Phone" className="px-2.5 py-1.5 rounded-lg text-xs" style={F_BASE} />
                       </div>
                     </div>
                   ))}
@@ -313,9 +345,9 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className={LABEL}>Lead Source</label>
+                <Lbl field="source" req>Lead Source</Lbl>
                 <select value={form.source} onChange={e => set('source', e.target.value)}
-                  className={SELECT} style={F.base}>
+                  className={SELECT} style={fs('source')}>
                   <option value="">— Select —</option>
                   <option value="INBOUND">Inbound</option>
                   <option value="OUTBOUND">Outbound</option>
@@ -331,14 +363,14 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                   onChange={e => set('referredBy', e.target.value)}
                   placeholder="Name or company"
                   className={INPUT}
-                  style={F.base}
+                  style={F_BASE}
                   disabled={form.source !== 'REFERRAL'}
                 />
               </div>
               <div className="col-span-2">
-                <label className={LABEL}>Partner</label>
+                <Lbl field="partnerId" req>Partner</Lbl>
                 <select value={form.partnerId} onChange={e => set('partnerId', e.target.value)}
-                  className={SELECT} style={F.base}>
+                  className={SELECT} style={fs('partnerId')}>
                   <option value="">— Select partner —</option>
                   {partners.map(p => (
                     <option key={p._id} value={p._id}>
@@ -358,7 +390,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
               {/* Value + Currency */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
-                  <label className={LABEL}>Estimated Deal Value</label>
+                  <Lbl field="estimatedValue" req>Estimated Deal Value</Lbl>
                   <input
                     type="number"
                     value={form.estimatedValue}
@@ -366,13 +398,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                     placeholder="0"
                     min="0"
                     className={INPUT}
-                    style={F.base}
+                    style={fs('estimatedValue')}
                   />
                 </div>
                 <div>
                   <label className={LABEL}>Currency</label>
                   <select value={form.currency} onChange={e => set('currency', e.target.value)}
-                    className={SELECT} style={F.base}>
+                    className={SELECT} style={F_BASE}>
                     <option value="USD">USD ($)</option>
                     <option value="INR">INR (₹)</option>
                     <option value="EUR">EUR (€)</option>
@@ -383,7 +415,7 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
               {/* Hours + Rate + Billing */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className={LABEL}>Estimated Hours</label>
+                  <Lbl field="estimatedHours" req>Estimated Hours</Lbl>
                   <input
                     type="number"
                     value={form.estimatedHours}
@@ -391,11 +423,11 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                     placeholder="e.g. 500"
                     min="0"
                     className={INPUT}
-                    style={F.base}
+                    style={fs('estimatedHours')}
                   />
                 </div>
                 <div>
-                  <label className={LABEL}>Proposed Rate /hr</label>
+                  <Lbl field="proposedRate" req>Proposed Rate /hr</Lbl>
                   <input
                     type="number"
                     value={form.proposedRate}
@@ -403,13 +435,13 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
                     placeholder="e.g. 75"
                     min="0"
                     className={INPUT}
-                    style={F.base}
+                    style={fs('proposedRate')}
                   />
                 </div>
                 <div>
-                  <label className={LABEL}>Billing Type</label>
+                  <Lbl field="billingType" req>Billing Type</Lbl>
                   <select value={form.billingType} onChange={e => set('billingType', e.target.value)}
-                    className={SELECT} style={F.base}>
+                    className={SELECT} style={fs('billingType')}>
                     <option value="">— Select —</option>
                     <option value="TIME_AND_MATERIAL">Time &amp; Material</option>
                     <option value="FIXED_PRICE">Fixed Price</option>
@@ -426,24 +458,30 @@ export default function CreateDealModal({ open, onClose }: CreateDealModalProps)
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className={LABEL}>Expected Close</label>
+                <Lbl field="expectedCloseDate" req>Expected Close</Lbl>
                 <input type="date" value={form.expectedCloseDate}
                   onChange={e => set('expectedCloseDate', e.target.value)}
-                  className={INPUT} style={F.base} />
+                  className={INPUT} style={fs('expectedCloseDate')} />
               </div>
               <div>
-                <label className={LABEL}>Proposed Start</label>
+                <Lbl field="proposedStartDate" req>Proposed Start</Lbl>
                 <input type="date" value={form.proposedStartDate}
                   min={TODAY}
                   onChange={e => set('proposedStartDate', e.target.value)}
-                  className={INPUT} style={F.base} />
+                  className={INPUT} style={fs('proposedStartDate')} />
+                {fieldErrors.proposedStartDate && fieldErrors.proposedStartDate !== 'Required' && (
+                  <p className="text-xs text-red-400 mt-1">{fieldErrors.proposedStartDate}</p>
+                )}
               </div>
               <div>
-                <label className={LABEL}>Proposed End</label>
+                <Lbl field="proposedEndDate" req>Proposed End</Lbl>
                 <input type="date" value={form.proposedEndDate}
                   min={form.proposedStartDate || TODAY}
                   onChange={e => set('proposedEndDate', e.target.value)}
-                  className={INPUT} style={F.base} />
+                  className={INPUT} style={fs('proposedEndDate')} />
+                {fieldErrors.proposedEndDate && fieldErrors.proposedEndDate !== 'Required' && (
+                  <p className="text-xs text-red-400 mt-1">{fieldErrors.proposedEndDate}</p>
+                )}
               </div>
             </div>
           </div>
