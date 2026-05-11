@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban, Users, LogOut,
   ChevronRight, Clock, BarChart2, DollarSign, X,
-  TrendingUp, Building2,
+  TrendingUp, Building2, Shield,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { clsx } from 'clsx';
@@ -20,6 +20,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/payments',        label: 'Payments',   icon: DollarSign },
   { to: '/partners',        label: 'Partners',   icon: Building2 },
   { to: '/users',           label: 'Users',      icon: Users },
+  { to: '/audit-logs',     label: 'Audit Logs', icon: Shield },
 ];
 
 const ENGINEER_NAV: NavItem[] = [

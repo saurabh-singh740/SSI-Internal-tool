@@ -1,13 +1,15 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
+import { AuthRequest } from '../../../middleware/auth.middleware';
 import DealAttachment from '../../../models/DealAttachment';
 import Deal           from '../../../models/Deal';
 import * as Storage   from '../../../services/storageService';
+import { auditLogger } from '../../../utils/auditLogger';
 import mongoose       from 'mongoose';
 
 const VALID_CATEGORIES = new Set(['SOW', 'PROPOSAL', 'CONTRACT', 'CLIENT_DOCUMENT', 'OTHER']);
 
 // GET /api/deals/:id/attachments
-export async function listAttachments(req: Request, res: Response, next: NextFunction) {
+export async function listAttachments(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const attachments = await DealAttachment
       .find({ dealId: req.params.id })
@@ -21,10 +23,9 @@ export async function listAttachments(req: Request, res: Response, next: NextFun
 }
 
 // POST /api/deals/:id/attachments  (multipart/form-data)
-export async function uploadAttachment(req: Request, res: Response, next: NextFunction) {
+export async function uploadAttachment(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const dealId = req.params.id;
-    const actor  = (req as any).user as { id: string };
 
     // Verify deal exists and is not closed
     const deal = await Deal.findById(dealId).lean();
@@ -56,7 +57,16 @@ export async function uploadAttachment(req: Request, res: Response, next: NextFu
       mimeType:     file.mimetype,
       sizeBytes:    file.size,
       category,
-      uploadedBy:   actor.id,
+      uploadedBy:   req.user!.id,
+    });
+
+    auditLogger({
+      req,
+      action:      'ATTACHMENT_UPLOADED',
+      module:      'DEALS',
+      entityId:    dealId,
+      entityLabel: (deal as any).title ?? dealId,
+      newValues:   { fileName: file.originalname, category, sizeBytes: file.size, mimeType: file.mimetype },
     });
 
     res.status(201).json({ success: true, data: attachment });
@@ -71,7 +81,7 @@ export async function uploadAttachment(req: Request, res: Response, next: NextFu
 }
 
 // DELETE /api/deals/:id/attachments/:attachmentId
-export async function deleteAttachment(req: Request, res: Response, next: NextFunction) {
+export async function deleteAttachment(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const { id: dealId, attachmentId } = req.params;
 
@@ -86,6 +96,16 @@ export async function deleteAttachment(req: Request, res: Response, next: NextFu
     }
 
     await attachment.deleteOne();
+
+    auditLogger({
+      req,
+      action:      'ATTACHMENT_DELETED',
+      module:      'DEALS',
+      entityId:    dealId,
+      entityLabel: attachment.originalName,
+      oldValues:   { fileName: attachment.originalName, category: attachment.category, sizeBytes: attachment.sizeBytes },
+    });
+
     res.json({ success: true, message: 'Attachment deleted' });
   } catch (err) {
     next(err);

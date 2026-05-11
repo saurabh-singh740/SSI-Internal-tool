@@ -10,6 +10,7 @@
  * which causes unhandled 'error' events that crash the process.
  */
 import { Queue } from 'bullmq';
+import { closeAuditQueue } from './auditQueue';
 
 let _engineerQueue: Queue | null = null;
 
@@ -46,6 +47,7 @@ export function getEngineerQueue(): Queue | null {
 }
 
 export async function closeQueues(): Promise<void> {
+  await closeAuditQueue();
   if (_engineerQueue) {
     try { await _engineerQueue.close(); } catch { /* ignore */ }
     _engineerQueue = null;

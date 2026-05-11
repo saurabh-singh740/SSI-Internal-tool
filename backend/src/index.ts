@@ -8,6 +8,7 @@ import app from './app';
 import { closeRedis } from './config/redis';
 import { closeQueues } from './queues/index';
 import { startEngineerWorker, closeEngineerWorker } from './queues/workers/engineerWorker';
+import { startAuditWorker,   closeAuditWorker }   from './queues/workers/auditWorker';
 import { startPaymentScheduler } from './utils/paymentScheduler';
 import { registerProjectHandlers } from './events/handlers/projectHandler';
 import { registerDealHandlers }    from './events/handlers/dealHandler';
@@ -27,6 +28,9 @@ registerDealHandlers();
 
 // ── BullMQ workers (active only when REDIS_URL is set) ────────────────────────
 startEngineerWorker();
+startAuditWorker();
+
+
 
 // ── Start server ──────────────────────────────────────────────────────────────
 let schedulerTask: ScheduledTask | undefined;
@@ -54,6 +58,7 @@ function gracefulShutdown(signal: string): void {
 
   server.close(async () => {
     try {
+      await closeAuditWorker();
       await closeEngineerWorker();
       await closeQueues();
       await closeRedis();

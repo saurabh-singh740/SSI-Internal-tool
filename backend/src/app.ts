@@ -15,8 +15,10 @@ import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
 
-import { apiRateLimiter } from './middleware/rateLimiters';
-import authRoutes         from './routes/auth.routes';
+import { apiRateLimiter }            from './middleware/rateLimiters';
+import { requestContextMiddleware } from './middleware/requestContext.middleware';
+import authRoutes                  from './routes/auth.routes';
+import auditLogRoutes              from './routes/auditLog.routes';
 import projectRoutes      from './routes/project.routes';
 import userRoutes         from './routes/user.routes';
 import timesheetRoutes    from './routes/timesheet.routes';
@@ -86,6 +88,11 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cookieParser());
 
+// ── Request context — requestId + clientIp ────────────────────────────────────
+// Must run after cookieParser (auth middleware reads cookies) and before routes
+// so every controller has access to req.requestId and req.clientIp.
+app.use(requestContextMiddleware);
+
 // ── NoSQL injection protection ────────────────────────────────────────────────
 app.use(mongoSanitize());
 
@@ -124,6 +131,7 @@ app.use('/api/payments',      paymentRoutes);
 app.use('/api/deals',                  dealRoutes);
 app.use('/api/deals/:id/attachments',  attachmentRoutes);
 app.use('/api/partners',               partnerRoutes);
+app.use('/api/audit-logs',             auditLogRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_req: Request, res: Response) => {

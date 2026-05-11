@@ -7,6 +7,7 @@ import Notification from '../models/Notification';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
 import { cacheGet, cacheSet, cacheDel } from '../utils/cache';
+import { auditLogger } from '../utils/auditLogger';
 
 const CACHE_KEY_PAYMENT_SUMMARY = 'stats:payments';
 const CACHE_TTL_SUMMARY = 60; // seconds
@@ -308,6 +309,15 @@ export const createPayment = async (req: AuthRequest, res: Response): Promise<vo
       .populate('projectId', 'name code clientName currency')
       .populate('createdBy', 'name email');
 
+    auditLogger({
+      req,
+      action:      'PAYMENT_CREATED',
+      module:      'PAYMENTS',
+      entityId:    String(payment._id),
+      entityLabel: payment.invoiceNumber || payment.invoiceMonth,
+      newValues:   { projectId, invoiceMonth: payment.invoiceMonth, grossAmount: payment.grossAmount, status: payment.status },
+    });
+
     void cacheDel(CACHE_KEY_PAYMENT_SUMMARY);
     res.status(201).json({ message: 'Payment created', payment: populated });
   } catch (err) {
@@ -366,6 +376,16 @@ export const updatePayment = async (req: AuthRequest, res: Response): Promise<vo
       .populate('projectId', 'name code clientName currency')
       .populate('createdBy', 'name email');
 
+    if (changes.length > 0) {
+      auditLogger({
+        req,
+        action:      'PAYMENT_UPDATED',
+        module:      'PAYMENTS',
+        entityId:    String(payment._id),
+        entityLabel: payment.invoiceNumber || payment.invoiceMonth,
+      });
+    }
+
     void cacheDel(CACHE_KEY_PAYMENT_SUMMARY);
     res.json({ message: 'Payment updated', payment: populated });
   } catch (err) {
@@ -389,6 +409,15 @@ export const deletePayment = async (req: AuthRequest, res: Response): Promise<vo
       changedAt: new Date(),
       changes:   [],
       snapshot:  payment.toObject(),
+    });
+
+    auditLogger({
+      req,
+      action:      'PAYMENT_DELETED',
+      module:      'PAYMENTS',
+      entityId:    String(payment._id),
+      entityLabel: payment.invoiceNumber || payment.invoiceMonth,
+      oldValues:   { invoiceMonth: payment.invoiceMonth, grossAmount: payment.grossAmount, status: payment.status },
     });
 
     await payment.deleteOne();

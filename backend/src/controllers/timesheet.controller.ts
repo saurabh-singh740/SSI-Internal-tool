@@ -7,6 +7,7 @@ import { AuthRequest } from '../middleware/auth.middleware';
 import { generateYearSheets, recalculateMonthTotals, recalculateAuthorizedHours } from '../utils/timesheetGenerator';
 import { getWorkingDaysBetween } from '../shared/timesheetEngine';
 import { safeError } from '../utils/apiError';
+import { auditLogger } from '../utils/auditLogger';
 
 function isValidObjectId(id: string): boolean {
   return mongoose.Types.ObjectId.isValid(id);
@@ -296,6 +297,16 @@ export const updateEntry = async (req: AuthRequest, res: Response): Promise<void
     }
 
     await timesheet.save();
+
+    auditLogger({
+      req,
+      action:      'TIMESHEET_ENTRY_UPDATED',
+      module:      'TIMESHEETS',
+      entityId:    `${projectId}/${engineerId}/${year}/${monthIndex}/${entryId}`,
+      entityLabel: `${year}-${monthIndex + 1}-${entryId}`,
+      metadata:    { projectId, engineerId, year, monthIndex },
+    });
+
     res.json({ month, hoursUsed });
   } catch (err: unknown) {
     console.error('[Timesheet] updateEntry error:', err);
@@ -325,6 +336,15 @@ export const lockMonth = async (req: AuthRequest, res: Response): Promise<void> 
     month.lockedBy = lock ? new mongoose.Types.ObjectId(req.user!.id) : undefined;
 
     await timesheet.save();
+
+    auditLogger({
+      req,
+      action:      lock ? 'TIMESHEET_MONTH_LOCKED' : 'TIMESHEET_MONTH_UNLOCKED',
+      module:      'TIMESHEETS',
+      entityId:    `${projectId}/${engineerId}/${year}/${monthIndex}`,
+      entityLabel: `${month.monthName} ${year}`,
+      metadata:    { projectId, engineerId, year, monthIndex },
+    });
 
     // Notify the engineer when their month is locked
     if (lock) {

@@ -11,6 +11,8 @@ import { dispatchProjectEngineers } from '../queues/dispatch';
 import { filterBody } from '../utils/filterBody';
 import { safeError } from '../utils/apiError';
 import { cacheGet, cacheSet, cacheDel } from '../utils/cache';
+import { auditLogger } from '../utils/auditLogger';
+import { computeDiff } from '../utils/diffUtil';
 
 const CACHE_KEY_PROJECT_STATS = 'stats:projects';
 const CACHE_TTL_STATS = 60; // seconds
@@ -189,6 +191,15 @@ export const createProject = async (req: AuthRequest, res: Response): Promise<vo
     // pre-save hooks so they are correct in the returned document.
     res.status(201).json({ message: 'Project created', project });
 
+    auditLogger({
+      req,
+      action:      'PROJECT_CREATED',
+      module:      'PROJECTS',
+      entityId:    String(project._id),
+      entityLabel: project.name,
+      newValues:   { name: project.name, code: project.code, type: project.type, status: project.status },
+    });
+
     // Invalidate cached stats so next dashboard load reflects the new project
     setImmediate(() => { void cacheDel(CACHE_KEY_PROJECT_STATS); });
 
@@ -249,8 +260,21 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
 
     // Apply ONLY allowlisted fields via filterBody — same utility used in createProject
     const safeUpdate = filterBody(req.body, PROJECT_WRITABLE_FIELDS);
+
+    // Snapshot before mutation for diff + engineer tracking
+    const beforeRaw    = project.toObject() as Record<string, unknown>;
+    const oldEngIds    = new Set(
+      (project.engineers as any[]).map((e: any) => String(e.engineer))
+    );
+
     Object.assign(project, safeUpdate);
     await project.save();
+
+    // Snapshot after mutation
+    const afterRaw  = project.toObject() as Record<string, unknown>;
+    const newEngIds = new Set(
+      (project.engineers as any[]).map((e: any) => String(e.engineer))
+    );
 
     // Notify on project close
     if (wasOpen && nowClosed) {
@@ -290,6 +314,40 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
       .populate('engineers.engineer', 'name email role')
       .populate('createdBy', 'name email');
 
+    // Diff non-engineer fields — only record what actually changed
+    const diffableFields = (Object.keys(safeUpdate) as string[]).filter(f => f !== 'engineers');
+    const { oldValues, newValues, hasChanges } = computeDiff(beforeRaw, afterRaw, diffableFields);
+
+    auditLogger({
+      req,
+      action:      'PROJECT_UPDATED',
+      module:      'PROJECTS',
+      entityId:    String(project._id),
+      entityLabel: project.name,
+      oldValues:   hasChanges ? oldValues : undefined,
+      newValues:   hasChanges ? newValues : undefined,
+    });
+
+    // Emit individual ENGINEER_ADDED / ENGINEER_REMOVED events
+    const addedEng   = [...newEngIds].filter(id => !oldEngIds.has(id));
+    const removedEng = [...oldEngIds].filter(id => !newEngIds.has(id));
+    addedEng.forEach(engineerId => auditLogger({
+      req,
+      action:      'ENGINEER_ADDED',
+      module:      'PROJECTS',
+      entityId:    String(project._id),
+      entityLabel: project.name,
+      metadata:    { engineerId },
+    }));
+    removedEng.forEach(engineerId => auditLogger({
+      req,
+      action:      'ENGINEER_REMOVED',
+      module:      'PROJECTS',
+      entityId:    String(project._id),
+      entityLabel: project.name,
+      metadata:    { engineerId },
+    }));
+
     void cacheDel(CACHE_KEY_PROJECT_STATS);
     res.json({ message: 'Project updated', project: populated });
   } catch (error: any) {
@@ -299,13 +357,22 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
 
 // DELETE /api/projects/:id
 // Cascade-deletes all dependent records to prevent orphaned data.
-export const deleteProject = async (req: Request, res: Response): Promise<void> => {
+export const deleteProject = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const project = await Project.findById(req.params.id);
     if (!project) {
       res.status(404).json({ message: 'Project not found' });
       return;
     }
+
+    auditLogger({
+      req,
+      action:      'PROJECT_DELETED',
+      module:      'PROJECTS',
+      entityId:    String(project._id),
+      entityLabel: project.name,
+      oldValues:   { name: project.name, code: project.code, status: project.status },
+    });
 
     // Cascade: remove all records tied to this project
     await Promise.all([

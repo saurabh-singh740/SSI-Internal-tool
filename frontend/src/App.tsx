@@ -28,6 +28,7 @@ const DealDetail               = lazy(() => import('./pages/presales/DealDetail'
 const Partners                 = lazy(() => import('./pages/presales/Partners'));
 const ForgotPassword           = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword            = lazy(() => import('./pages/ResetPassword'));
+const AuditLogs                = lazy(() => import('./pages/AuditLogs'));
 
 // Minimal skeleton shown while a lazy chunk loads — prevents blank flash.
 function PageSkeleton() {
@@ -170,6 +171,9 @@ export default function App() {
 
         {/* Users — admin only */}
         <Route path="users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
+
+        {/* Audit Logs — admin only */}
+        <Route path="audit-logs" element={<ProtectedRoute adminOnly><AuditLogs /></ProtectedRoute>} />
 
         {/* Timesheets */}
         <Route path="timesheets" element={<Timesheets />} />

@@ -9,6 +9,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../../../middleware/auth.middleware';
 import { filterBody } from '../../../utils/filterBody';
 import { safeError } from '../../../utils/apiError';
+import { auditLogger } from '../../../utils/auditLogger';
+import { computeDiff } from '../../../utils/diffUtil';
 import { dealService, DealFilter } from '../services/DealService';
 import { conversionService, ConversionOverrides } from '../services/ConversionService';
 import { DealStage } from '../../../models/Deal';
@@ -93,6 +95,14 @@ export const createDeal = async (req: AuthRequest, res: Response): Promise<void>
   try {
     const data = filterBody(req.body, DEAL_WRITABLE_FIELDS);
     const deal = await dealService.createDeal(data as any, req.user!.id);
+    auditLogger({
+      req,
+      action:      'DEAL_CREATED',
+      module:      'DEALS',
+      entityId:    String(deal._id),
+      entityLabel: deal.title,
+      newValues:   { title: deal.title, stage: deal.stage, priority: deal.priority },
+    });
     res.status(201).json({ deal });
   } catch (err) {
     res.status(serviceErrorToStatus(err)).json({ message: (err as Error).message, ...safeError(err) });
@@ -104,7 +114,26 @@ export const createDeal = async (req: AuthRequest, res: Response): Promise<void>
 export const updateDeal = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const data = filterBody(req.body, DEAL_WRITABLE_FIELDS);
-    const deal = await dealService.updateDeal(req.params.id, data as any, req.user!.id);
+
+    // Capture before-state for diff
+    const dealBefore = await dealService.getDealById(req.params.id);
+    const deal       = await dealService.updateDeal(req.params.id, data as any, req.user!.id);
+
+    // Compute diff over only the fields that were submitted
+    const changedFields = Object.keys(data) as string[];
+    const before = dealBefore ? (dealBefore as unknown as Record<string, unknown>) : {};
+    const after  = deal       as unknown as Record<string, unknown>;
+    const { oldValues, newValues, hasChanges } = computeDiff(before, after, changedFields);
+
+    auditLogger({
+      req,
+      action:      'DEAL_UPDATED',
+      module:      'DEALS',
+      entityId:    String(deal._id),
+      entityLabel: deal.title,
+      oldValues:   hasChanges ? oldValues : undefined,
+      newValues:   hasChanges ? newValues : undefined,
+    });
     res.json({ deal });
   } catch (err) {
     res.status(serviceErrorToStatus(err)).json({ message: (err as Error).message, ...safeError(err) });
@@ -126,6 +155,14 @@ export const changeDealStage = async (req: AuthRequest, res: Response): Promise<
       { lostReason, lostNote, note }
     );
 
+    auditLogger({
+      req,
+      action:      'DEAL_STAGE_CHANGED',
+      module:      'DEALS',
+      entityId:    String(deal._id),
+      entityLabel: deal.title,
+      newValues:   { stage, ...(lostReason ? { lostReason } : {}) },
+    });
     res.json({ deal });
   } catch (err) {
     res.status(serviceErrorToStatus(err)).json({ message: (err as Error).message, ...safeError(err) });
@@ -155,6 +192,13 @@ export const updateSOW = async (req: AuthRequest, res: Response): Promise<void> 
       return;
     }
     const deal = await dealService.updateSOW(req.params.id, sowSections, req.user!.id);
+    auditLogger({
+      req,
+      action:      'DEAL_SOW_UPDATED',
+      module:      'DEALS',
+      entityId:    String(deal._id),
+      entityLabel: deal.title,
+    });
     res.json({ deal });
   } catch (err) {
     res.status(serviceErrorToStatus(err)).json({ message: (err as Error).message, ...safeError(err) });
@@ -181,6 +225,14 @@ export const convertDealToProject = async (req: AuthRequest, res: Response): Pro
   try {
     const overrides = filterBody(req.body, CONVERSION_OVERRIDE_FIELDS) as ConversionOverrides;
     const result    = await conversionService.convertToProject(req.params.id, req.user!.id, overrides);
+    auditLogger({
+      req,
+      action:      'DEAL_CONVERTED',
+      module:      'DEALS',
+      entityId:    String(result.deal._id),
+      entityLabel: result.deal.title,
+      metadata:    { projectId: String(result.project._id), projectName: result.project.name },
+    });
     res.status(201).json({
       message: 'Deal successfully converted to project',
       project: result.project,
@@ -201,7 +253,18 @@ export const convertDealToProject = async (req: AuthRequest, res: Response): Pro
 
 export const deleteDeal = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const deal = await dealService.getDealById(req.params.id);
     await dealService.deleteDeal(req.params.id);
+    if (deal) {
+      auditLogger({
+        req,
+        action:      'DEAL_DELETED',
+        module:      'DEALS',
+        entityId:    req.params.id,
+        entityLabel: deal.title,
+        oldValues:   { stage: deal.stage, title: deal.title },
+      });
+    }
     res.json({ message: 'Deal deleted' });
   } catch (err) {
     res.status(serviceErrorToStatus(err)).json({ message: (err as Error).message, ...safeError(err) });

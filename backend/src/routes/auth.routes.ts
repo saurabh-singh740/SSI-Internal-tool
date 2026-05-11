@@ -24,7 +24,7 @@ router.post('/forgot-password', authRateLimiter, forgotPassword);
 router.post('/reset-password',  authRateLimiter, resetPassword);
 
 // ── Authenticated routes ──────────────────────────────────────────────────────
-router.post('/logout',          logout);
+router.post('/logout',          protect, logout);
 router.get( '/me',              protect, getMe);
 router.put( '/change-password', protect, changePassword);
 

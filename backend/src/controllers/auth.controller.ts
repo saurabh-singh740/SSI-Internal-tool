@@ -6,6 +6,7 @@ import PasswordReset, { hashToken } from '../models/PasswordReset';
 import { signToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
+import { auditLogger } from '../utils/auditLogger';
 import {
   sendPasswordResetEmail,
   sendPasswordChangedEmail,
@@ -79,7 +80,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     // SECURITY: role is always ENGINEER regardless of what was sent in req.body
     const user = await User.create({ name, email, password, role: 'ENGINEER', phone });
-    const token = signToken({ id: String(user._id), role: user.role, email: user.email });
+    const token = signToken({ id: String(user._id), role: user.role, email: user.email, name: user.name });
 
     setCookieToken(res, token);
     res.status(201).json({ message: 'Account created', user });
@@ -103,18 +104,35 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
       // Use identical wording for email and password mismatch — prevents user enumeration
+      auditLogger({
+        action: 'AUTH_LOGIN_FAILED', module: 'AUTH',
+        actorEmail: email, metadata: { reason: 'user_not_found' },
+        ipAddress: req.clientIp, userAgent: req.headers['user-agent'], requestId: req.requestId,
+      });
       res.status(401).json({ message: 'Invalid email or password' });
       return;
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      auditLogger({
+        action: 'AUTH_LOGIN_FAILED', module: 'AUTH',
+        actorId: String(user._id), actorEmail: user.email, actorRole: user.role,
+        metadata: { reason: 'wrong_password' },
+        ipAddress: req.clientIp, userAgent: req.headers['user-agent'], requestId: req.requestId,
+      });
       res.status(401).json({ message: 'Invalid email or password' });
       return;
     }
 
-    const token = signToken({ id: String(user._id), role: user.role, email: user.email });
+    const token = signToken({ id: String(user._id), role: user.role, email: user.email, name: user.name });
     setCookieToken(res, token);
+    auditLogger({
+      action: 'AUTH_LOGIN', module: 'AUTH',
+      actorId: String(user._id), actorEmail: user.email, actorRole: user.role,
+      entityId: String(user._id), entityLabel: user.email,
+      ipAddress: req.clientIp, userAgent: req.headers['user-agent'], requestId: req.requestId,
+    });
     res.json({ message: 'Login successful', user: user.toJSON() });
   } catch (error) {
     console.error('[Auth] login error:', error);
@@ -123,7 +141,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 };
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
-export const logout = (_req: Request, res: Response): void => {
+// protect middleware runs before this (see auth.routes.ts), so req.user is set.
+export const logout = (req: AuthRequest, res: Response): void => {
   // clearCookie must pass the same attributes that were used when the cookie
   // was set — if secure/sameSite differ, the browser treats them as a
   // different cookie and the existing token cookie is NOT cleared.
@@ -131,6 +150,13 @@ export const logout = (_req: Request, res: Response): void => {
     path: '/',
     secure:   process.env.NODE_ENV === 'production',
     sameSite: 'lax',
+  });
+  auditLogger({
+    req,   // auto-extracts actor (id, email, role, name), IP, UA, requestId
+    action:      'AUTH_LOGOUT',
+    module:      'AUTH',
+    entityId:    req.user?.id,
+    entityLabel: req.user?.email,
   });
   res.json({ message: 'Logged out' });
 };
@@ -342,10 +368,15 @@ export const registerAdmin = async (req: Request, res: Response): Promise<void> 
       role:     'ADMIN',
     });
 
-    const token = signToken({ id: String(admin._id), role: admin.role, email: admin.email });
+    const token = signToken({ id: String(admin._id), role: admin.role, email: admin.email, name: admin.name });
     setCookieToken(res, token);
 
-    console.log(`[Auth] [AUDIT] First admin account created: ${admin.email}`);
+    auditLogger({
+      action: 'AUTH_ADMIN_REGISTERED', module: 'AUTH',
+      actorId: String(admin._id), actorEmail: admin.email, actorRole: admin.role,
+      entityId: String(admin._id), entityLabel: admin.email,
+      ipAddress: req.clientIp, userAgent: req.headers['user-agent'], requestId: req.requestId,
+    });
 
     res.status(201).json({
       message: 'Admin account created successfully',

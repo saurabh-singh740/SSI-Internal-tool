@@ -5,7 +5,7 @@ import User from '../models/User';
 import Project from '../models/Project';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { filterBody } from '../utils/filterBody';
-import { auditLog } from '../utils/auditLogger';
+import { auditLogger } from '../utils/auditLogger';
 import { safeError } from '../utils/apiError';
 import { sendWelcomeEmail } from '../services/emailService';
 
@@ -59,18 +59,14 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       phone: phone ? String(phone).trim().slice(0, 30) : undefined,
     });
 
-    // Audit: log admin user creation — high-privilege action
-    if (userRole === 'ADMIN') {
-      await auditLog({
-        action:  'user.admin_created',
-        actorId:    req.user!.id,
-        actorEmail: req.user!.email,
-        targetType: 'user',
-        targetId:   String(user._id),
-        targetLabel: user.email,
-        after: { role: userRole },
-      });
-    }
+    auditLogger({
+      req,
+      action:      'USER_CREATED',
+      module:      'USERS',
+      entityId:    String(user._id),
+      entityLabel: user.email,
+      newValues:   { name: user.name, email: user.email, role: userRole },
+    });
 
     const userObj = user.toObject() as unknown as Record<string, unknown>;
     delete userObj.password;
@@ -257,17 +253,31 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
 
     if (!user) { res.status(404).json({ message: 'User not found' }); return; }
 
-    // Audit log for role changes
     if (updateData.role && updateData.role !== target.role) {
-      await auditLog({
-        action:      'user.role_changed',
-        actorId:     req.user!.id,
-        actorEmail:  req.user!.email,
-        targetType:  'user',
-        targetId:    requestedId,
-        targetLabel: target.email,
-        before: { role: target.role },
-        after:  { role: updateData.role },
+      auditLogger({
+        req,
+        action:      'USER_ROLE_CHANGED',
+        module:      'USERS',
+        entityId:    requestedId,
+        entityLabel: target.email,
+        oldValues:   { role: target.role },
+        newValues:   { role: updateData.role },
+      });
+    } else {
+      // Build oldValues snapshot from target for the fields that actually changed
+      const oldValues: Record<string, unknown> = {};
+      Object.keys(updateData).forEach(f => {
+        const v = (target as Record<string, unknown>)[f];
+        if (v !== undefined) oldValues[f] = v;
+      });
+      auditLogger({
+        req,
+        action:      'USER_UPDATED',
+        module:      'USERS',
+        entityId:    requestedId,
+        entityLabel: target.email,
+        oldValues,
+        newValues:   updateData,
       });
     }
 
@@ -287,15 +297,13 @@ export const deleteUser = async (req: AuthRequest, res: Response): Promise<void>
 
     await User.deleteOne({ _id: req.params.id });
 
-    // Audit log for user deletion
-    await auditLog({
-      action:      'user.deleted',
-      actorId:     req.user!.id,
-      actorEmail:  req.user!.email,
-      targetType:  'user',
-      targetId:    req.params.id,
-      targetLabel: user.email,
-      before: { name: user.name, email: user.email, role: user.role },
+    auditLogger({
+      req,
+      action:      'USER_DELETED',
+      module:      'USERS',
+      entityId:    req.params.id,
+      entityLabel: user.email,
+      oldValues:   { name: user.name, email: user.email, role: user.role },
     });
 
     res.json({ message: 'User deleted' });
