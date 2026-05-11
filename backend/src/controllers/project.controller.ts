@@ -262,7 +262,7 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
     const safeUpdate = filterBody(req.body, PROJECT_WRITABLE_FIELDS);
 
     // Snapshot before mutation for diff + engineer tracking
-    const beforeRaw    = project.toObject() as Record<string, unknown>;
+    const beforeRaw    = project.toObject() as unknown as Record<string, unknown>;
     const oldEngIds    = new Set(
       (project.engineers as any[]).map((e: any) => String(e.engineer))
     );
@@ -271,7 +271,7 @@ export const updateProject = async (req: AuthRequest, res: Response): Promise<vo
     await project.save();
 
     // Snapshot after mutation
-    const afterRaw  = project.toObject() as Record<string, unknown>;
+    const afterRaw  = project.toObject() as unknown as Record<string, unknown>;
     const newEngIds = new Set(
       (project.engineers as any[]).map((e: any) => String(e.engineer))
     );

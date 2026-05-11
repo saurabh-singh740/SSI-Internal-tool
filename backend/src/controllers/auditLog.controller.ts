@@ -193,6 +193,16 @@ export const getAuditStats = async (_req: AuthRequest, res: Response): Promise<v
             { $match: { severity: 'HIGH' } },
             { $count: 'v' },
           ],
+          failed: [
+            { $match: { action: 'AUTH_LOGIN_FAILED' } },
+            { $count: 'v' },
+          ],
+          topActors: [
+            { $match: { actorEmail: { $nin: ['system', 'unknown', ''] } } },
+            { $group: { _id: '$actorEmail', name: { $first: '$actorName' }, count: { $sum: 1 } } },
+            { $sort:  { count: -1 } },
+            { $limit: 5 },
+          ],
           recentByDay: [
             {
               $group: {
@@ -209,13 +219,15 @@ export const getAuditStats = async (_req: AuthRequest, res: Response): Promise<v
 
     res.json({
       stats: {
-        total:      result.total[0]?.v    ?? 0,
-        critical:   result.critical[0]?.v ?? 0,
-        high:       result.high[0]?.v     ?? 0,
-        byModule:   result.byModule,
-        bySeverity: result.bySeverity,
+        total:       result.total[0]?.v    ?? 0,
+        critical:    result.critical[0]?.v ?? 0,
+        high:        result.high[0]?.v     ?? 0,
+        failed:      result.failed[0]?.v   ?? 0,
+        byModule:    result.byModule,
+        bySeverity:  result.bySeverity,
         recentByDay: result.recentByDay,
-        window:     '30d',
+        topActors:   result.topActors,
+        window:      '30d',
       },
     });
   } catch (err) {
