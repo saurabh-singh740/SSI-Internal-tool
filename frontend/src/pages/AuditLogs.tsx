@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Shield, Search, RefreshCw, X, AlertCircle, AlertTriangle,
   Activity, User, Hash, Globe, Monitor, Download, Filter,
-  ChevronDown, ChevronUp, Zap, Terminal, ArrowRight,
+  ChevronDown, ChevronUp, Zap, ArrowRight,
   XCircle, BarChart2, LogIn,
 } from 'lucide-react';
 import api from '../api/axios';
@@ -412,7 +412,7 @@ function Toolbar({
 
       {/* Module select */}
       <select
-        value={drafts.module}
+        value={drafts.module ?? ''}
         onChange={e => onDraftChange('module', e.target.value)}
         className="px-2.5 py-1.5 rounded-lg text-xs text-gray-300 outline-none"
         style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)' }}
@@ -423,7 +423,7 @@ function Toolbar({
 
       {/* Severity select */}
       <select
-        value={drafts.severity}
+        value={drafts.severity ?? ''}
         onChange={e => onDraftChange('severity', e.target.value)}
         className="px-2.5 py-1.5 rounded-lg text-xs text-gray-300 outline-none"
         style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)' }}
@@ -651,7 +651,6 @@ function DiffTable({ old: o, next: n }: { old?: Record<string, unknown>; next?: 
 // ── Detail Drawer ─────────────────────────────────────────────────────────────
 
 function DetailDrawer({ log, onClose }: { log: AuditLog; onClose: () => void }) {
-  const [showRaw, setShowRaw] = useState(false);
   const norm  = normAction(log.action);
   const desc  = getDesc(log);
   const sev   = SEV[log.severity as keyof typeof SEV] ?? SEV.LOW;
@@ -781,34 +780,6 @@ function DetailDrawer({ log, onClose }: { log: AuditLog; onClose: () => void }) 
           </DrawerSection>
         )}
 
-        {/* Raw JSON */}
-        {(log.oldValues || log.newValues) && (
-          <DrawerSection label="Raw JSON">
-            <button
-              onClick={() => setShowRaw(v => !v)}
-              className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors flex items-center gap-1 mb-2"
-            >
-              <Terminal className="h-2.5 w-2.5" />
-              {showRaw ? 'Hide' : 'Show raw JSON'}
-            </button>
-            {showRaw && (
-              <div className="space-y-2">
-                {log.oldValues && (
-                  <pre className="text-[10px] rounded-lg p-3 overflow-x-auto leading-relaxed"
-                       style={{ background: 'rgba(0,0,0,0.5)', color: '#fca5a5' }}>
-                    {JSON.stringify(log.oldValues, null, 2)}
-                  </pre>
-                )}
-                {log.newValues && (
-                  <pre className="text-[10px] rounded-lg p-3 overflow-x-auto leading-relaxed"
-                       style={{ background: 'rgba(0,0,0,0.5)', color: '#86efac' }}>
-                    {JSON.stringify(log.newValues, null, 2)}
-                  </pre>
-                )}
-              </div>
-            )}
-          </DrawerSection>
-        )}
       </div>
     </div>
   );

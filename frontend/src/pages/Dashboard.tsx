@@ -1,222 +1,280 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { FolderKanban, CheckCircle, PauseCircle, AlertTriangle, TrendingUp, Plus, ArrowRight } from 'lucide-react';
+import {
+  FolderKanban, CheckCircle, PauseCircle, AlertTriangle,
+  TrendingUp, Plus, ArrowRight,
+} from 'lucide-react';
 import api from '../api/axios';
 import { Project, ProjectStats } from '../types';
 import Header from '../components/layout/Header';
-import { clsx } from 'clsx';
 
 type FilterKey = 'all' | 'ACTIVE' | 'ON_HOLD' | 'nearLimit';
 
-const statusBadge: Record<string, string> = {
-  ACTIVE:  'badge badge-green',
-  CLOSED:  'badge badge-gray',
-  ON_HOLD: 'badge badge-yellow',
-};
-const statusLabel: Record<string, string> = {
-  ACTIVE: 'Active', CLOSED: 'Closed', ON_HOLD: 'On Hold',
-};
+const STATUS_CFG = {
+  ACTIVE:  { dot: '#4ade80', bg: 'rgba(74,222,128,0.12)',  text: '#4ade80',  border: 'rgba(74,222,128,0.2)'  },
+  CLOSED:  { dot: '#6b7280', bg: 'rgba(107,114,128,0.12)', text: '#9ca3af',  border: 'rgba(107,114,128,0.2)' },
+  ON_HOLD: { dot: '#fbbf24', bg: 'rgba(251,191,36,0.12)',  text: '#fbbf24',  border: 'rgba(251,191,36,0.2)'  },
+} as const;
 
-const filterLabel: Record<FilterKey, string> = {
-  all:       'Recent Projects',
-  ACTIVE:    'Active Projects',
-  ON_HOLD:   'On Hold Projects',
-  nearLimit: 'Near Hour Limit',
-};
+function StatusDot({ status }: { status: string }) {
+  const c = STATUS_CFG[status as keyof typeof STATUS_CFG] ?? STATUS_CFG.CLOSED;
+  return <span className="h-1.5 w-1.5 rounded-full inline-block" style={{ background: c.dot }} />;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const c = STATUS_CFG[status as keyof typeof STATUS_CFG] ?? STATUS_CFG.CLOSED;
+  const label = status === 'ON_HOLD' ? 'On Hold' : status.charAt(0) + status.slice(1).toLowerCase();
+  return (
+    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide leading-none"
+          style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+      {label}
+    </span>
+  );
+}
+
+function MiniSparkline({ projects }: { projects: Project[] }) {
+  if (!projects.length) return null;
+  const buckets = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (6 - i));
+    return { label: d.toLocaleDateString('en', { weekday: 'short' }), count: 0 };
+  });
+  projects.forEach(p => {
+    if (!p.startDate) return;
+    const ms = Date.now() - new Date(p.startDate).getTime();
+    const days = Math.floor(ms / 86400000);
+    if (days >= 0 && days < 7) buckets[6 - days].count++;
+  });
+  const max = Math.max(...buckets.map(b => b.count), 1);
+  const W = 6, GAP = 2, H = 24;
+  return (
+    <svg width={buckets.length * (W + GAP)} height={H}>
+      {buckets.map((b, i) => {
+        const h = Math.max(2, Math.round((b.count / max) * H));
+        return (
+          <rect key={i} x={i * (W + GAP)} y={H - h} width={W} height={h} rx={1}
+                fill={`rgba(99,102,241,${0.3 + (b.count / max) * 0.6})`}>
+            <title>{b.label}: {b.count}</title>
+          </rect>
+        );
+      })}
+    </svg>
+  );
+}
 
 export default function Dashboard() {
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
 
   const { data: stats, isLoading: statsLoading } = useQuery<ProjectStats>({
     queryKey: ['dashboard-stats'],
-    queryFn: () => api.get('/projects/stats/summary').then(r => r.data.stats),
+    queryFn:  () => api.get('/projects/stats/summary').then(r => r.data.stats),
   });
 
-  // Single fetch for all projects — shared cache key with the Projects page so
-  // navigating Dashboard → Projects is instant (no second network request).
   const { data: allProjects = [], isLoading: listLoading } = useQuery<Project[]>({
     queryKey: ['projects'],
-    queryFn: () => api.get('/projects').then(r => r.data.projects as Project[]),
+    queryFn:  () => api.get('/projects').then(r => r.data.projects as Project[]),
   });
 
-  // Client-side filtering — zero extra network round-trips when the user clicks
-  // a stat card.  Previously each filter click triggered a new API call.
   const displayProjects = useMemo(() => {
     if (activeFilter === 'nearLimit') return allProjects.filter(p => p.isNearLimit);
     if (activeFilter === 'ACTIVE')    return allProjects.filter(p => p.status === 'ACTIVE');
     if (activeFilter === 'ON_HOLD')   return allProjects.filter(p => p.status === 'ON_HOLD');
-    // 'all' — show the 5 most-recently-created projects
-    return allProjects.slice(0, 5);
+    return allProjects.slice(0, 8);
   }, [allProjects, activeFilter]);
 
   const loading = statsLoading || listLoading;
 
-  const statCards: {
-    label: string;
-    value: number;
-    icon: React.ElementType;
-    iconClass: string;
-    valueClass: string;
-    filterKey: FilterKey;
-    ringClass: string;
-  }[] = [
-    {
-      label: 'Total Projects',
-      value: stats?.total ?? 0,
-      icon: FolderKanban,
-      iconClass: 'text-brand-400 bg-brand-600/10',
-      valueClass: 'text-ink-100',
-      filterKey: 'all',
-      ringClass: 'ring-brand-500/40',
-    },
-    {
-      label: 'Active',
-      value: stats?.active ?? 0,
-      icon: CheckCircle,
-      iconClass: 'text-emerald-400 bg-emerald-500/10',
-      valueClass: 'text-emerald-400',
-      filterKey: 'ACTIVE',
-      ringClass: 'ring-emerald-500/40',
-    },
-    {
-      label: 'On Hold',
-      value: stats?.onHold ?? 0,
-      icon: PauseCircle,
-      iconClass: 'text-amber-400 bg-amber-500/10',
-      valueClass: 'text-amber-400',
-      filterKey: 'ON_HOLD',
-      ringClass: 'ring-amber-500/40',
-    },
-    {
-      label: 'Near Hour Limit',
-      value: stats?.nearLimit ?? 0,
-      icon: AlertTriangle,
-      iconClass: 'text-red-400 bg-red-500/10',
-      valueClass: 'text-red-400',
-      filterKey: 'nearLimit',
-      ringClass: 'ring-red-500/40',
-    },
+  type PillDef = { label: string; value: number; icon: React.ElementType; color: string; key: FilterKey };
+  const pills: PillDef[] = [
+    { label: 'Total',      value: stats?.total    ?? 0, icon: FolderKanban,  color: '#6366f1', key: 'all'      },
+    { label: 'Active',     value: stats?.active   ?? 0, icon: CheckCircle,   color: '#4ade80', key: 'ACTIVE'   },
+    { label: 'On Hold',    value: stats?.onHold   ?? 0, icon: PauseCircle,   color: '#fbbf24', key: 'ON_HOLD'  },
+    { label: 'Near Limit', value: stats?.nearLimit ?? 0, icon: AlertTriangle, color: '#f87171', key: 'nearLimit' },
   ];
 
   return (
-    <div>
+    <div className="flex flex-col min-h-screen" style={{ background: '#050816' }}>
       <Header
         title="Dashboard"
-        subtitle="Overview of all projects"
+        subtitle="Project portfolio overview"
       />
 
-      <div className="page-content">
-        {/* Stat cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {statCards.map(({ label, value, icon: Icon, iconClass, valueClass, filterKey, ringClass }) => {
-            const isActive = activeFilter === filterKey;
-            return (
-              <button
-                key={label}
-                type="button"
-                onClick={() => setActiveFilter(filterKey)}
-                className={clsx(
-                  'stat-card text-left w-full transition-all duration-150',
-                  'hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 active:shadow-sm',
-                  'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  isActive && ['ring-2', ringClass, 'shadow-md'],
-                )}
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-[11px] font-semibold text-ink-400 uppercase tracking-widest">{label}</p>
-                  <div className={clsx('h-9 w-9 rounded-lg flex items-center justify-center flex-shrink-0', iconClass)}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                </div>
-                <p className={clsx('text-3xl font-bold tabular-nums', statsLoading ? 'skeleton w-12 h-8' : valueClass)}>
-                  {statsLoading ? '' : value}
-                </p>
-                {isActive && (
-                  <p className="mt-2 text-[10px] font-medium text-ink-500 uppercase tracking-wide">
-                    Showing below ↓
-                  </p>
-                )}
-              </button>
-            );
-          })}
+      <div className="px-4 pt-4 space-y-4">
+
+        {/* ── Stat pills ──────────────────────────────────────────────────── */}
+        <div
+          className="rounded-xl px-4 py-3"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-3.5 w-3.5 text-indigo-400" />
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Portfolio</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <MiniSparkline projects={allProjects} />
+              <span className="text-[9px] text-gray-700">7-day starts</span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {pills.map(({ label, value, icon: Icon, color, key }) => {
+              const active = activeFilter === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveFilter(key)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all"
+                  style={{
+                    background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
+                    border:     `1px solid ${active ? color + '55' : 'rgba(255,255,255,0.07)'}`,
+                  }}
+                >
+                  <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ color }} />
+                  {statsLoading
+                    ? <span className="h-4 w-6 rounded animate-pulse" style={{ background: 'rgba(255,255,255,0.1)' }} />
+                    : <span className="text-sm font-bold text-white tabular-nums">{value}</span>
+                  }
+                  <span className="text-[10px] text-gray-500">{label}</span>
+                  {active && <span className="text-[9px]" style={{ color }}>▼</span>}
+                </button>
+              );
+            })}
+
+            {/* Project distribution mini-bars */}
+            {!statsLoading && allProjects.length > 0 && (
+              <div className="ml-auto flex items-center gap-3">
+                {['ACTIVE','ON_HOLD','CLOSED'].map(s => {
+                  const cnt = allProjects.filter(p => p.status === s).length;
+                  const pct = allProjects.length ? (cnt / allProjects.length) * 100 : 0;
+                  const cfg = STATUS_CFG[s as keyof typeof STATUS_CFG];
+                  return (
+                    <div key={s} className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: cfg.dot }} />
+                      <div className="w-12 h-1 rounded-full" style={{ background: 'rgba(255,255,255,0.07)' }}>
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: cfg.dot }} />
+                      </div>
+                      <span className="text-[9px] text-gray-600">{cnt}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Filtered / Recent Projects */}
-        <div className="card overflow-hidden">
-          <div className="card-header">
+        {/* ── Project table ────────────────────────────────────────────────── */}
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}
+        >
+          {/* Table header */}
+          <div
+            className="flex items-center justify-between px-4 py-2.5"
+            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+          >
             <div className="flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-ink-400" />
-              <h3 className="text-sm font-semibold text-ink-100">{filterLabel[activeFilter]}</h3>
+              <FolderKanban className="h-3.5 w-3.5 text-indigo-400" />
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+                {activeFilter === 'all'       ? 'Recent Projects'
+                : activeFilter === 'ACTIVE'   ? 'Active Projects'
+                : activeFilter === 'ON_HOLD'  ? 'On Hold Projects'
+                : 'Near Hour Limit'}
+              </span>
+              {!loading && (
+                <span className="text-[10px] text-gray-700">{displayProjects.length} shown</span>
+              )}
             </div>
-            <Link to="/projects" className="btn-ghost text-xs py-1.5 px-2.5">
-              View all <ArrowRight className="h-3.5 w-3.5" />
+            <Link
+              to="/projects"
+              className="flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-200 transition-colors"
+            >
+              View all <ArrowRight className="h-3 w-3" />
             </Link>
           </div>
 
-          {listLoading ? (
-            <div className="p-6 space-y-3">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="skeleton h-10 w-full" />
+          {loading ? (
+            <div className="p-4 space-y-2">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="h-9 rounded-lg animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />
               ))}
             </div>
           ) : displayProjects.length === 0 ? (
-            <div className="empty-state">
-              <FolderKanban className="h-10 w-10 text-ink-500 mb-3" />
-              <h3 className="text-sm font-semibold text-ink-100">No projects found</h3>
-              <p className="text-sm text-ink-300 mb-4">
-                {activeFilter === 'all'
-                  ? 'Create your first project to get started.'
-                  : `No projects match the "${filterLabel[activeFilter]}" filter.`}
+            <div className="py-12 text-center">
+              <FolderKanban className="h-8 w-8 text-gray-700 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm font-medium">No projects found</p>
+              <p className="text-gray-700 text-xs mt-1">
+                {activeFilter === 'all' ? 'Create your first project to get started.' : 'No projects match this filter.'}
               </p>
               {activeFilter === 'all' && (
-                <Link to="/projects/create" className="btn-primary text-xs">
-                  <Plus className="h-3.5 w-3.5" /> New Project
+                <Link
+                  to="/projects/create"
+                  className="inline-flex items-center gap-1 mt-3 text-xs text-indigo-400 hover:text-indigo-200"
+                >
+                  <Plus className="h-3 w-3" /> New Project
                 </Link>
               )}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="data-table">
+              <table className="w-full min-w-[640px]">
                 <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Code</th>
-                    <th>Client</th>
-                    <th>Status</th>
-                    <th>Utilization</th>
-                    <th></th>
+                  <tr style={{ background: 'rgba(255,255,255,0.015)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    <th className="px-4 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest">Project</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest w-20">Code</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest hidden sm:table-cell">Client</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest w-16">Status</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest w-32">Utilization</th>
+                    <th className="px-3 py-2 text-center text-[9px] font-semibold text-gray-700 uppercase tracking-widest w-10 hidden md:table-cell">Eng</th>
+                    <th className="px-2 py-2 w-8" />
                   </tr>
                 </thead>
                 <tbody>
-                  {displayProjects.map((p) => {
+                  {displayProjects.map(p => {
                     const util = p.totalAuthorizedHours > 0
-                      ? Math.round((p.hoursUsed / p.totalAuthorizedHours) * 100)
-                      : 0;
+                      ? Math.round((p.hoursUsed / p.totalAuthorizedHours) * 100) : 0;
+                    const barColor = util >= 90 ? '#ef4444' : util >= 70 ? '#f59e0b' : '#4ade80';
                     return (
-                      <tr key={p._id}>
-                        <td className="font-medium text-ink-100">{p.name}</td>
-                        <td className="font-mono text-xs text-ink-400">{p.code}</td>
-                        <td className="text-ink-300">{p.clientName || '—'}</td>
-                        <td>
-                          <span className={statusBadge[p.status]}>
-                            {statusLabel[p.status]}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-ink-600 rounded-full max-w-[72px]">
-                              <div
-                                className={clsx('h-1.5 rounded-full transition-all', util >= 90 ? 'bg-red-500' : util >= 70 ? 'bg-amber-500' : 'bg-emerald-500')}
-                                style={{ width: `${Math.min(util, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs tabular-nums text-ink-400 w-8">{util}%</span>
+                      <tr
+                        key={p._id}
+                        className="group transition-colors"
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.025)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <StatusDot status={p.status} />
+                            <span className="text-sm font-medium text-gray-200 truncate">{p.name}</span>
+                            {p.isNearLimit && <AlertTriangle className="h-3 w-3 text-amber-400 flex-shrink-0" />}
                           </div>
                         </td>
-                        <td>
-                          <Link to={`/projects/${p._id}`} className="text-brand-400 hover:text-brand-300 text-xs font-medium">
-                            View →
+                        <td className="px-3 py-2.5">
+                          <code className="text-[10px] font-mono text-gray-500">{p.code}</code>
+                        </td>
+                        <td className="px-3 py-2.5 hidden sm:table-cell">
+                          <span className="text-xs text-gray-500 truncate block max-w-[120px]">{p.clientName || '—'}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge status={p.status} />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1 rounded-full max-w-[64px]" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                              <div className="h-full rounded-full" style={{ width: `${Math.min(util, 100)}%`, background: barColor }} />
+                            </div>
+                            <span className="text-[10px] font-mono tabular-nums" style={{ color: barColor }}>{util}%</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-center hidden md:table-cell">
+                          <span className="text-xs text-gray-600">{p.engineers?.length ?? 0}</span>
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <Link
+                            to={`/projects/${p._id}`}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <ArrowRight className="h-3.5 w-3.5 text-indigo-400" />
                           </Link>
                         </td>
                       </tr>
@@ -227,6 +285,7 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
       </div>
     </div>
   );

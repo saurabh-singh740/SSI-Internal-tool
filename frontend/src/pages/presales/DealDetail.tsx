@@ -104,7 +104,7 @@ export default function DealDetail() {
     if (deal?.resourcePlan?.length) {
       setPlanRows(
         deal.resourcePlan.map(e => ({
-          engineer:             typeof e.engineer === 'object' ? (e.engineer as User)._id : e.engineer as string,
+          engineer:             (e.engineer !== null && typeof e.engineer === 'object') ? (e.engineer as User)._id : e.engineer as string,
           role:                 e.role,
           allocationPercentage: e.allocationPercentage,
           startDate:            e.startDate ?? '',

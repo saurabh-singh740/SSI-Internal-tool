@@ -3,49 +3,54 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   DollarSign, AlertCircle, Clock, TrendingUp, Plus, ArrowRight,
+  RefreshCw, CheckCircle,
 } from 'lucide-react';
-import { clsx } from 'clsx';
 import api from '../api/axios';
 import Header from '../components/layout/Header';
 import type { PaymentSummary, Payment } from '../types';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtCurrency(amount: number, currency = 'USD') {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
+}
+
+function fmtFull(amount: number, currency = 'USD') {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 2 }).format(amount);
+}
+
+const STATUS_CFG = {
+  pending:  { bg: 'rgba(251,191,36,0.12)',  text: '#fbbf24', border: 'rgba(251,191,36,0.2)'  },
+  received: { bg: 'rgba(74,222,128,0.12)',  text: '#4ade80', border: 'rgba(74,222,128,0.2)'  },
+  overdue:  { bg: 'rgba(239,68,68,0.12)',   text: '#f87171', border: 'rgba(239,68,68,0.2)'   },
+  partial:  { bg: 'rgba(99,102,241,0.12)',  text: '#818cf8', border: 'rgba(99,102,241,0.2)'  },
+} as const;
+
+function StatusBadge({ status }: { status: string }) {
+  const c = STATUS_CFG[status as keyof typeof STATUS_CFG] ?? STATUS_CFG.pending;
+  return (
+    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide leading-none"
+          style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+      {status}
+    </span>
+  );
+}
 
 type FilterKey = 'all' | 'last30' | 'pending' | 'overdue';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function fmtCurrency(amount: number, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
-}
-
-const STATUS_BADGE: Record<string, string> = {
-  pending:  'badge badge-yellow',
-  received: 'badge badge-green',
-  overdue:  'badge badge-red',
-  partial:  'badge badge-blue',
-};
-
-const FILTER_LABEL: Record<FilterKey, string> = {
-  all:     'Recent Payments',
-  last30:  'Payments — Last 30 Days',
-  pending: 'Pending Payments',
-  overdue: 'Overdue Payments',
-};
-
-// ─── Component ────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PaymentDashboard() {
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
 
-  const { data: summary, isLoading: summaryLoading, isError } = useQuery<PaymentSummary>({
+  const { data: summary, isLoading: summaryLoading, refetch: refetchSummary } = useQuery<PaymentSummary>({
     queryKey: ['payment-summary'],
     queryFn: () => api.get('/payments/summary').then(r => r.data.summary),
   });
 
   const { data: recent = [], isLoading: recentLoading } = useQuery<Payment[]>({
     queryKey: ['payments-recent'],
-    queryFn: () => api.get('/payments?limit=5').then(r => r.data.payments),
+    queryFn: () => api.get('/payments?limit=8').then(r => r.data.payments),
   });
 
   const { data: overdue = [], isLoading: overdueLoading } = useQuery<Payment[]>({
@@ -53,7 +58,6 @@ export default function PaymentDashboard() {
     queryFn: () => api.get('/payments?status=overdue&limit=10').then(r => r.data.payments),
   });
 
-  // Filtered query — only active when a non-default filter is selected
   const { data: filteredPayments = [], isLoading: filteredLoading } = useQuery<Payment[]>({
     queryKey: ['payments-filtered', activeFilter],
     enabled: activeFilter !== 'all',
@@ -62,7 +66,7 @@ export default function PaymentDashboard() {
         const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
         const res = await api.get('/payments?limit=100');
         return (res.data.payments as Payment[]).filter(
-          p => new Date(p.paymentDate).getTime() >= cutoff,
+          p => new Date(p.paymentDate).getTime() >= cutoff
         );
       }
       const res = await api.get(`/payments?status=${activeFilter}`);
@@ -71,198 +75,234 @@ export default function PaymentDashboard() {
   });
 
   const loading = summaryLoading || recentLoading || overdueLoading;
-  const error   = isError ? 'Failed to load payment dashboard' : '';
 
-  if (loading) return (
-    <div className="page-content">
-      <Header title="Payments" />
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="skeleton h-28 rounded-xl" />
-        ))}
-      </div>
-    </div>
-  );
+  type PillDef = {
+    label: string; value: string; sub?: string;
+    icon: React.ElementType; color: string; key: FilterKey;
+  };
 
-  if (error) return (
-    <div className="page-content">
-      <Header title="Payments" />
-      <div className="empty-state mt-10">
-        <AlertCircle className="h-10 w-10 text-red-400 mx-auto mb-2" />
-        <p className="text-red-600">{error}</p>
-      </div>
-    </div>
-  );
-
-  const cards: {
-    label:     string;
-    value:     string;
-    sub?:      string;
-    icon:      React.ElementType;
-    color:     string;
-    bg:        string;
-    filterKey: FilterKey;
-    ringColor: string;
-  }[] = [
+  const pills: PillDef[] = [
     {
-      label:     'Total Revenue',
-      value:     fmtCurrency(summary?.totalRevenue ?? 0),
-      icon:      TrendingUp,
-      color:     'text-emerald-400',
-      bg:        'bg-emerald-500/15',
-      filterKey: 'all',
-      ringColor: 'ring-emerald-400',
+      label: 'Total Revenue', value: fmtCurrency(summary?.totalRevenue ?? 0),
+      icon: TrendingUp, color: '#4ade80', key: 'all',
     },
     {
-      label:     'Last 30 Days',
-      value:     fmtCurrency(summary?.last30DaysRevenue ?? 0),
-      sub:       `${summary?.last30DaysCount ?? 0} payments received`,
-      icon:      DollarSign,
-      color:     'text-blue-400',
-      bg:        'bg-blue-500/15',
-      filterKey: 'last30',
-      ringColor: 'ring-blue-400',
+      label: 'Last 30 Days', value: fmtCurrency(summary?.last30DaysRevenue ?? 0),
+      sub: `${summary?.last30DaysCount ?? 0} payments`,
+      icon: DollarSign, color: '#60a5fa', key: 'last30',
     },
     {
-      label:     'Pending Amount',
-      value:     fmtCurrency(summary?.pendingAmount ?? 0),
-      sub:       `${summary?.pendingCount ?? 0} invoices pending`,
-      icon:      Clock,
-      color:     'text-amber-400',
-      bg:        'bg-amber-500/15',
-      filterKey: 'pending',
-      ringColor: 'ring-amber-400',
+      label: 'Pending', value: fmtCurrency(summary?.pendingAmount ?? 0),
+      sub: `${summary?.pendingCount ?? 0} invoices`,
+      icon: Clock, color: '#fbbf24', key: 'pending',
     },
     {
-      label:     'Overdue',
-      value:     String(summary?.overdueCount ?? 0),
-      sub:       'payments past due',
-      icon:      AlertCircle,
-      color:     'text-red-400',
-      bg:        'bg-red-500/15',
-      filterKey: 'overdue',
-      ringColor: 'ring-red-400',
+      label: 'Overdue', value: String(summary?.overdueCount ?? 0),
+      sub: 'past due',
+      icon: AlertCircle, color: '#f87171', key: 'overdue',
     },
   ];
 
-  function handleCardClick(key: FilterKey) {
-    // Toggle off → back to default view
-    setActiveFilter(prev => prev === key ? 'all' : key);
-  }
+  const showFiltered = activeFilter !== 'all';
+  const tablePayments = showFiltered ? filteredPayments : recent;
+  const tableLoading  = showFiltered ? filteredLoading  : recentLoading;
 
   return (
-    <div className="page-content">
+    <div className="flex flex-col min-h-screen" style={{ background: '#050816' }}>
       <Header
-        title="Payment Dashboard"
+        title="Payments"
         subtitle="Financial overview"
         actions={
-          <Link to="/payments/log" className="btn-primary flex items-center gap-2">
-            <Plus className="h-4 w-4" /> New Payment
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => refetchSummary()}
+              className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 transition-colors"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            <Link
+              to="/payments/log"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white"
+              style={{ background: 'linear-gradient(135deg,#6366f1,#7c3aed)' }}
+            >
+              <Plus className="h-3.5 w-3.5" /> Record Payment
+            </Link>
+          </div>
         }
       />
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-        {cards.map(({ label, value, sub, icon: Icon, color, bg, filterKey, ringColor }) => {
-          const isActive = activeFilter === filterKey;
-          return (
-            <button
-              key={label}
-              type="button"
-              onClick={() => handleCardClick(filterKey)}
-              className={clsx(
-                'stat-card text-left w-full transition-all duration-150',
-                'hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 active:shadow-sm',
-                'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                isActive && ['ring-2', ringColor, 'shadow-md'],
-              )}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-                  <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
-                  {sub && <p className="text-xs text-ink-400 mt-0.5">{sub}</p>}
-                  {isActive && (
-                    <p className="mt-2 text-[10px] font-medium text-ink-400 uppercase tracking-wide">
-                      Showing below ↓
-                    </p>
-                  )}
-                </div>
-                <div className={`${bg} rounded-xl p-2.5 flex-shrink-0`}>
-                  <Icon className={`h-5 w-5 ${color}`} />
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      <div className="px-4 pt-4 space-y-4">
 
-      {/* ── Filtered view (any non-default card is active) ───────────────────── */}
-      {activeFilter !== 'all' ? (
-        <div className="card mt-8">
-          <div className="card-header flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-ink-100">{FILTER_LABEL[activeFilter]}</h3>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setActiveFilter('all')}
-                className="text-xs text-ink-400 hover:text-ink-200 underline underline-offset-2"
-              >
-                Clear filter
-              </button>
-              <Link to="/payments/log" className="text-xs text-brand-400 hover:underline flex items-center gap-1">
-                Full log <ArrowRight className="h-3 w-3" />
-              </Link>
+        {/* ── Stat pills ────────────────────────────────────────────────────── */}
+        <div
+          className="rounded-xl px-4 py-3"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Financial Summary</span>
             </div>
+            {showFiltered && (
+              <button
+                onClick={() => setActiveFilter('all')}
+                className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+              >
+                Clear filter ×
+              </button>
+            )}
           </div>
 
-          {filteredLoading ? (
-            <div className="p-6 space-y-3">
-              {[...Array(4)].map((_, i) => <div key={i} className="skeleton h-10 rounded" />)}
+          <div className="flex flex-wrap gap-2">
+            {pills.map(({ label, value, sub, icon: Icon, color, key }) => {
+              const active = activeFilter === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveFilter(prev => prev === key ? 'all' : key)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all"
+                  style={{
+                    background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
+                    border:     `1px solid ${active ? color + '55' : 'rgba(255,255,255,0.07)'}`,
+                  }}
+                >
+                  <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ color }} />
+                  {summaryLoading
+                    ? <span className="h-4 w-16 rounded animate-pulse" style={{ background: 'rgba(255,255,255,0.1)' }} />
+                    : <span className="text-sm font-bold text-white tabular-nums">{value}</span>
+                  }
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-gray-500 whitespace-nowrap">{label}</span>
+                    {sub && <span className="text-[9px] text-gray-700 block">{sub}</span>}
+                  </div>
+                  {active && <span className="text-[9px]" style={{ color }}>▼</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Overdue alert strip ────────────────────────────────────────────── */}
+        {!showFiltered && overdue.length > 0 && (
+          <div
+            className="rounded-xl px-4 py-2.5 flex items-center justify-between"
+            style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}
+          >
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />
+              <span className="text-xs text-red-400 font-medium">
+                {overdue.length} overdue payment{overdue.length !== 1 ? 's' : ''} require attention
+              </span>
             </div>
-          ) : filteredPayments.length === 0 ? (
-            <div className="empty-state py-10">
-              <DollarSign className="h-8 w-8 text-ink-500 mx-auto mb-2" />
-              <p className="text-ink-400 text-sm">No payments match this filter</p>
+            <button
+              onClick={() => setActiveFilter('overdue')}
+              className="flex items-center gap-1 text-xs text-red-400 hover:text-red-200 transition-colors"
+            >
+              View <ArrowRight className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
+        {/* ── Payments table ─────────────────────────────────────────────────── */}
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}
+        >
+          <div
+            className="flex items-center justify-between px-4 py-2.5"
+            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+          >
+            <div className="flex items-center gap-2">
+              {showFiltered
+                ? <>{activeFilter === 'pending'  && <Clock    className="h-3.5 w-3.5 text-amber-400" />}
+                    {activeFilter === 'overdue'  && <AlertCircle className="h-3.5 w-3.5 text-red-400"  />}
+                    {activeFilter === 'last30'   && <TrendingUp  className="h-3.5 w-3.5 text-blue-400" />}
+                  </>
+                : <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
+              }
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+                {showFiltered
+                  ? activeFilter === 'last30'  ? 'Last 30 Days'
+                  : activeFilter === 'pending' ? 'Pending Payments'
+                  : 'Overdue Payments'
+                  : 'Recent Payments'}
+              </span>
+              {!tableLoading && (
+                <span className="text-[10px] text-gray-700">{tablePayments.length} records</span>
+              )}
+            </div>
+            <Link
+              to="/payments/log"
+              className="flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-200 transition-colors"
+            >
+              Full log <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+
+          {tableLoading ? (
+            <div className="p-4 space-y-2">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="h-10 rounded-lg animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />
+              ))}
+            </div>
+          ) : tablePayments.length === 0 ? (
+            <div className="py-12 text-center">
+              <DollarSign className="h-8 w-8 text-gray-700 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm">No payments match this filter</p>
+              <Link to="/payments/log" className="inline-flex items-center gap-1 mt-3 text-xs text-indigo-400 hover:text-indigo-200">
+                <Plus className="h-3 w-3" /> Record payment
+              </Link>
             </div>
           ) : (
-            <div className="card-body p-0 overflow-x-auto">
-              <table className="data-table">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px]">
                 <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Period</th>
-                    <th>Invoice #</th>
-                    <th className="text-right">Gross</th>
-                    <th className="text-right">Net Paid</th>
-                    <th>Due / Paid Date</th>
-                    <th>Status</th>
+                  <tr style={{ background: 'rgba(255,255,255,0.015)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    <th className="px-4 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest">Project</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest">Period</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest hidden sm:table-cell">Invoice #</th>
+                    <th className="px-3 py-2 text-right text-[9px] font-semibold text-gray-700 uppercase tracking-widest">Gross</th>
+                    <th className="px-3 py-2 text-right text-[9px] font-semibold text-gray-700 uppercase tracking-widest">Net Paid</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest hidden md:table-cell">Date</th>
+                    <th className="px-3 py-2 text-left text-[9px] font-semibold text-gray-700 uppercase tracking-widest w-16">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredPayments.map((p) => {
+                  {tablePayments.map(p => {
                     const project = p.projectId as any;
                     return (
-                      <tr key={p._id}>
-                        <td className="font-medium text-ink-100 min-w-[120px]">
-                          {project?.name ?? '—'}
-                        </td>
-                        <td className="text-ink-300">{p.invoiceMonth}</td>
-                        <td className="text-xs text-ink-400">{p.invoiceNumber || '—'}</td>
-                        <td className="text-right font-mono text-sm text-ink-200">
-                          {fmtCurrency(p.grossAmount, p.currency)}
-                        </td>
-                        <td className="text-right font-mono text-sm font-semibold text-ink-100">
-                          {fmtCurrency(p.netAmount, p.currency)}
-                        </td>
-                        <td className="text-sm text-ink-300">
-                          {new Date(p.paymentDate).toLocaleDateString()}
-                        </td>
-                        <td>
-                          <span className={STATUS_BADGE[p.status] ?? 'badge badge-gray'}>
-                            {p.status}
+                      <tr
+                        key={p._id}
+                        className="group transition-colors"
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.025)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <td className="px-4 py-2.5">
+                          <span className="text-sm font-medium text-gray-200 truncate block max-w-[140px]">
+                            {project?.name ?? '—'}
                           </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="text-xs text-gray-400">{p.invoiceMonth}</span>
+                        </td>
+                        <td className="px-3 py-2.5 hidden sm:table-cell">
+                          <code className="text-[10px] font-mono text-gray-600">{p.invoiceNumber || '—'}</code>
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <span className="text-xs font-mono text-gray-300">{fmtFull(p.grossAmount, p.currency)}</span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <span className="text-xs font-mono font-semibold text-gray-100">{fmtFull(p.netAmount, p.currency)}</span>
+                        </td>
+                        <td className="px-3 py-2.5 hidden md:table-cell">
+                          <span className="text-[11px] text-gray-500 tabular-nums">
+                            {new Date(p.paymentDate).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge status={p.status} />
                         </td>
                       </tr>
                     );
@@ -271,111 +311,20 @@ export default function PaymentDashboard() {
               </table>
             </div>
           )}
-        </div>
 
-      ) : (
-        /* ── Default two-column layout (unchanged) ────────────────────────── */
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
-          {/* Overdue payments */}
-          {overdue.length > 0 && (
-            <div className="card">
-              <div className="card-header flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 text-red-400" />
-                  <h3 className="text-sm font-semibold text-ink-100">Overdue Payments</h3>
-                </div>
-                <Link to="/payments/log?status=overdue" className="text-xs text-brand-400 hover:underline flex items-center gap-1">
-                  View all <ArrowRight className="h-3 w-3" />
-                </Link>
-              </div>
-              <div className="card-body p-0">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Project</th>
-                      <th>Period</th>
-                      <th className="text-right">Amount</th>
-                      <th>Due Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {overdue.map((p) => {
-                      const project = p.projectId as any;
-                      return (
-                        <tr key={p._id}>
-                          <td className="font-medium text-ink-100 min-w-[100px]">
-                            {project?.name ?? '—'}
-                          </td>
-                          <td className="text-ink-300">{p.invoiceMonth}</td>
-                          <td className="text-right font-mono text-red-400 font-semibold">
-                            {fmtCurrency(p.grossAmount, p.currency)}
-                          </td>
-                          <td className="text-red-400 text-xs">
-                            {new Date(p.paymentDate).toLocaleDateString()}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Recent payments */}
-          <div className="card">
-            <div className="card-header flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-ink-100">Recent Payments</h3>
-              <Link to="/payments/log" className="text-xs text-brand-400 hover:underline flex items-center gap-1">
-                View all <ArrowRight className="h-3 w-3" />
+          {!showFiltered && (
+            <div className="px-4 py-2.5" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <Link
+                to="/payments/log"
+                className="text-[11px] text-indigo-400 hover:text-indigo-200 transition-colors flex items-center gap-1"
+              >
+                View full payment log <ArrowRight className="h-3 w-3" />
               </Link>
             </div>
-            {recent.length === 0 ? (
-              <div className="empty-state py-8">
-                <DollarSign className="h-8 w-8 text-ink-500 mx-auto mb-2" />
-                <p className="text-ink-400 text-sm">No payments recorded yet</p>
-                <Link to="/payments/log" className="btn-primary mt-3 text-xs inline-flex items-center gap-1">
-                  <Plus className="h-3 w-3" /> Record payment
-                </Link>
-              </div>
-            ) : (
-              <div className="card-body p-0">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Project</th>
-                      <th>Period</th>
-                      <th className="text-right">Net Paid</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recent.map((p) => {
-                      const project = p.projectId as any;
-                      return (
-                        <tr key={p._id}>
-                          <td className="font-medium text-ink-100 min-w-[100px]">
-                            {project?.name ?? '—'}
-                          </td>
-                          <td className="text-ink-300">{p.invoiceMonth}</td>
-                          <td className="text-right font-mono font-semibold text-ink-100">
-                            {fmtCurrency(p.netAmount, p.currency)}
-                          </td>
-                          <td>
-                            <span className={STATUS_BADGE[p.status] ?? 'badge badge-gray'}>
-                              {p.status}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          )}
         </div>
-      )}
+
+      </div>
     </div>
   );
 }
