@@ -7,6 +7,8 @@ import { AuthProvider } from './context/AuthContext';
 import queryClient from './lib/queryClient';
 import './index.css';
 
+document.getElementById('app-loading')?.remove();
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
