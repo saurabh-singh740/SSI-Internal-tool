@@ -29,6 +29,10 @@ export default defineConfig(({ mode }) => {
       // so Express serves it as static files on the same origin.
       outDir: path.resolve(__dirname, '../backend/public'),
       emptyOutDir: true,
+      // Disable the module-preload polyfill — it injects an inline <script> that
+      // violates Content-Security-Policy script-src 'self'.  All browsers we target
+      // (Chrome 66+, Firefox 115+, Safari 16.4+) support modulepreload natively.
+      modulePreload: { polyfill: false },
       rollupOptions: {
         output: {
           manualChunks(id) {
