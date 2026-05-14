@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  login, register, logout, getMe,
+  login, register, logout, getMe, getSession,
   loginValidation, registerValidation,
   registerAdmin, registerAdminValidation,
   getSetupStatus,
@@ -13,6 +13,9 @@ const router = Router();
 
 // ── Public setup probe ────────────────────────────────────────────────────────
 router.get('/setup-status', getSetupStatus);
+
+// ── Session probe — always 200, never logs a red 401 in DevTools ──────────────
+router.get('/session', getSession);
 
 // ── Rate-limited public routes ────────────────────────────────────────────────
 router.post('/register',       authRateLimiter, registerValidation,      register);

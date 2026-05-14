@@ -61,12 +61,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const initAuth = async () => {
       try {
-        const res = await api.get('/auth/me');
-        dispatch({ type: 'LOGIN', payload: res.data.user });
+        // /auth/session always returns 200 ({ authenticated, user? }) so the
+        // browser never logs a red 401 network error in DevTools on page load.
+        const res = await api.get('/auth/session');
+        if (res.data.authenticated) {
+          dispatch({ type: 'LOGIN', payload: res.data.user });
+        } else {
+          dispatch({ type: 'LOGOUT' });
+        }
       } catch {
-        // 401 = no valid session — expected when the user is not logged in.
-        // 429 = rate limit hit — treat as "not authenticated" and stop retrying.
-        // In both cases: clear loading and leave user as null.
+        // Network failure or server down — treat as unauthenticated.
         dispatch({ type: 'LOGOUT' });
       }
     };

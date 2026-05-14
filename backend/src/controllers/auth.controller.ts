@@ -3,7 +3,7 @@ import { body, validationResult } from 'express-validator';
 import crypto from 'crypto';
 import User from '../models/User';
 import PasswordReset, { hashToken } from '../models/PasswordReset';
-import { signToken } from '../utils/jwt';
+import { signToken, verifyToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
 import { auditLogger } from '../utils/auditLogger';
@@ -195,6 +195,40 @@ export const logout = async (req: AuthRequest, res: Response): Promise<void> => 
     entityLabel: req.user?.email,
   });
   res.json({ message: 'Logged out' });
+};
+
+// ── GET /api/auth/session ─────────────────────────────────────────────────────
+// Public (no protect middleware). Always returns 200 so the browser never logs
+// a red 401 error in DevTools during the initial session probe.
+// Returns { authenticated: true, user } or { authenticated: false }.
+export const getSession = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const token = req.cookies?.token;
+    if (!token) { res.json({ authenticated: false }); return; }
+
+    let decoded: ReturnType<typeof verifyToken>;
+    try {
+      decoded = verifyToken(token);
+    } catch {
+      res.json({ authenticated: false }); return;
+    }
+
+    // Fetch user; include tokenVersion for the version check, then strip it.
+    const userDoc = await User.findById(decoded.id).select('-password -__v').lean<Record<string, unknown>>();
+    if (!userDoc) { res.json({ authenticated: false }); return; }
+
+    if (decoded.tokenVersion !== undefined) {
+      const currentVersion = (userDoc.tokenVersion as number | undefined) ?? 0;
+      if (decoded.tokenVersion !== currentVersion) {
+        res.json({ authenticated: false }); return;
+      }
+    }
+
+    const { tokenVersion: _tv, ...safeUser } = userDoc;
+    res.json({ authenticated: true, user: safeUser });
+  } catch {
+    res.json({ authenticated: false });
+  }
 };
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────

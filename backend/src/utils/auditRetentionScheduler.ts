@@ -68,6 +68,18 @@ async function tick(): Promise<void> {
   let totalCleaned = 0;
 
   try {
+    // ── 0. Null-severity cleanup: corrupted docs with missing/invalid severity ─
+    // These were written before Mongoose enum validation was enforced.
+    // Audit logs are immutable (no updates allowed), so we delete them.
+    const VALID_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+    const { deletedCount: nullSevCount } = await (AuditLog as any).deleteMany({
+      severity: { $nin: VALID_SEVERITIES },
+    });
+    if (nullSevCount > 0) {
+      console.log(`[AuditRetention] Removed ${nullSevCount} doc(s) with null/invalid severity`);
+      totalCleaned += nullSevCount;
+    }
+
     // ── 1. Legacy cleanup: docs without expiresAt ────────────────────────────
     // These were written before this retention system was deployed.
     // Apply the current RETENTION_DAYS policy retroactively.
