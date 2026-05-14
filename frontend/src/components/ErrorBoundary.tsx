@@ -10,6 +10,19 @@ interface State {
   error: Error | null;
 }
 
+// If a lazy chunk fails to load (stale browser cache after a deploy), reload once.
+// The flag prevents infinite loops if the reload itself fails.
+const CHUNK_RELOAD_KEY = 'cc_chunk_reloaded';
+
+function isChunkLoadError(error: Error): boolean {
+  return (
+    error.message.includes('Failed to fetch dynamically imported module') ||
+    error.message.includes('Importing a module script failed') ||
+    error.message.includes('Loading chunk') ||
+    error.name === 'ChunkLoadError'
+  );
+}
+
 /**
  * ErrorBoundary — catches render-time errors in child components and displays
  * a fallback UI instead of white-screening the entire app.
@@ -32,8 +45,18 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Replace with your observability SDK (Sentry.captureException, etc.)
     console.error('[ErrorBoundary] Uncaught render error:', error, info.componentStack);
+
+    // Chunk load failures mean the browser has a cached JS bundle that references
+    // assets which no longer exist after a new deploy (emptyOutDir wipes old hashes).
+    // Reload once to pick up the new index.html and fresh asset hashes.
+    if (isChunkLoadError(error)) {
+      const alreadyReloaded = sessionStorage.getItem(CHUNK_RELOAD_KEY);
+      if (!alreadyReloaded) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, '1');
+        window.location.reload();
+      }
+    }
   }
 
   private reset = () => {
