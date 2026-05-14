@@ -9,7 +9,8 @@ import { closeRedis } from './config/redis';
 import { closeQueues } from './queues/index';
 import { startEngineerWorker, closeEngineerWorker } from './queues/workers/engineerWorker';
 import { startAuditWorker,   closeAuditWorker }   from './queues/workers/auditWorker';
-import { startPaymentScheduler } from './utils/paymentScheduler';
+import { startPaymentScheduler }         from './utils/paymentScheduler';
+import { startAuditRetentionScheduler }  from './utils/auditRetentionScheduler';
 import { registerProjectHandlers } from './events/handlers/projectHandler';
 import { registerDealHandlers }    from './events/handlers/dealHandler';
 import { seedDefaultPartner }      from './modules/presales/services/PartnerService';
@@ -33,11 +34,13 @@ startAuditWorker();
 
 
 // ── Start server ──────────────────────────────────────────────────────────────
-let schedulerTask: ScheduledTask | undefined;
+let schedulerTask:         ScheduledTask | undefined;
+let auditRetentionTask:    ScheduledTask | undefined;
 
 const server = app.listen(PORT, async () => {
   console.log(`[Server] Running on http://localhost:${PORT} (${process.env.NODE_ENV || 'development'})`);
-  schedulerTask = startPaymentScheduler();
+  schedulerTask      = startPaymentScheduler();
+  auditRetentionTask = startAuditRetentionScheduler();
 
   // Seed the default SSI internal partner (no-op if already exists)
   try {
@@ -54,7 +57,8 @@ const server = app.listen(PORT, async () => {
 function gracefulShutdown(signal: string): void {
   console.log(`[Server] ${signal} received — shutting down gracefully…`);
 
-  if (schedulerTask) schedulerTask.stop();
+  if (schedulerTask)      schedulerTask.stop();
+  if (auditRetentionTask) auditRetentionTask.stop();
 
   server.close(async () => {
     try {

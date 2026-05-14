@@ -7,6 +7,7 @@ import { signToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { safeError } from '../utils/apiError';
 import { auditLogger } from '../utils/auditLogger';
+import { cacheDel } from '../utils/cache';
 import {
   sendPasswordResetEmail,
   sendPasswordChangedEmail,
@@ -29,6 +30,13 @@ function setCookieToken(res: Response, token: string): void {
     maxAge:   COOKIE_MAX_AGE,
     path:     '/',
   });
+}
+
+// ── Cache invalidation helper ─────────────────────────────────────────────────
+// Call this whenever a user's role or session version changes so the
+// auth middleware's Redis caches are flushed immediately.
+async function invalidateUserAuthCache(userId: string): Promise<void> {
+  await cacheDel(`user:role:${userId}`, `user:tv:${userId}`);
 }
 
 // ── Validation chains (reusable) ─────────────────────────────────────────────
@@ -80,7 +88,13 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     // SECURITY: role is always ENGINEER regardless of what was sent in req.body
     const user = await User.create({ name, email, password, role: 'ENGINEER', phone });
-    const token = signToken({ id: String(user._id), role: user.role, email: user.email, name: user.name });
+    const token = signToken({
+      id:           String(user._id),
+      role:         user.role,
+      email:        user.email,
+      name:         user.name,
+      tokenVersion: user.tokenVersion ?? 0,
+    });
 
     setCookieToken(res, token);
     res.status(201).json({ message: 'Account created', user });
@@ -125,7 +139,16 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const token = signToken({ id: String(user._id), role: user.role, email: user.email, name: user.name });
+    // Include tokenVersion so protect() can validate this session is still active.
+    // If the user later logs out or changes password, tokenVersion increments and
+    // this token will be rejected on the next authenticated request.
+    const token = signToken({
+      id:           String(user._id),
+      role:         user.role,
+      email:        user.email,
+      name:         user.name,
+      tokenVersion: user.tokenVersion ?? 0,
+    });
     setCookieToken(res, token);
     auditLogger({
       action: 'AUTH_LOGIN', module: 'AUTH',
@@ -142,7 +165,20 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
 // protect middleware runs before this (see auth.routes.ts), so req.user is set.
-export const logout = (req: AuthRequest, res: Response): void => {
+export const logout = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (req.user?.id) {
+      // Increment tokenVersion — all JWTs carrying the old version become invalid.
+      // This is the server-side revocation mechanism for the current session.
+      await User.findByIdAndUpdate(req.user.id, { $inc: { tokenVersion: 1 } });
+      // Flush Redis caches immediately so the middleware picks up the new version
+      await invalidateUserAuthCache(req.user.id);
+    }
+  } catch (err) {
+    // Non-fatal — client cookie is still cleared, user is effectively logged out.
+    console.error('[Auth] logout token invalidation failed:', err);
+  }
+
   // clearCookie must pass the same attributes that were used when the cookie
   // was set — if secure/sameSite differ, the browser treats them as a
   // different cookie and the existing token cookie is NOT cleared.
@@ -164,7 +200,14 @@ export const logout = (req: AuthRequest, res: Response): void => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const user = await User.findById(req.user?.id);
+    // .lean() returns a plain object (~3-5x faster than full Mongoose hydration).
+    // .select('-password -__v') strips fields not needed by the frontend.
+    // This endpoint is called on every page load from AuthContext — lean() matters.
+    const user = await User
+      .findById(req.user?.id)
+      .select('-password -__v -tokenVersion')
+      .lean();
+
     if (!user) {
       res.status(404).json({ message: 'User not found' });
       return;
@@ -267,7 +310,11 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     if (!user) { res.status(404).json({ message: 'User not found' }); return; }
 
     user.password = password;
+    // Invalidate ALL existing sessions — password reset means the account may be
+    // compromised, so force re-login on all devices.
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
+    await invalidateUserAuthCache(String(user._id));
     await PasswordReset.deleteMany({ user: user._id });
 
     // Notify user — fire and forget
@@ -301,11 +348,22 @@ export const changePassword = async (req: AuthRequest, res: Response): Promise<v
     }
 
     user.password = newPassword;
+    // Changing password invalidates all other sessions (security best practice).
+    // The user's current session cookie is cleared below, so they must re-login.
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
+    await invalidateUserAuthCache(String(user._id));
 
     sendPasswordChangedEmail({ to: user.email, name: user.name }).catch(() => {});
 
-    res.json({ message: 'Password changed successfully' });
+    // Clear the auth cookie so the user must log in fresh with the new password
+    res.clearCookie(COOKIE_NAME, {
+      path:     '/',
+      secure:   process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
+
+    res.json({ message: 'Password changed successfully. Please log in again.' });
   } catch (error) {
     console.error('[Auth] changePassword error:', error);
     res.status(500).json({ message: 'Server error', ...safeError(error) });
@@ -368,7 +426,13 @@ export const registerAdmin = async (req: Request, res: Response): Promise<void> 
       role:     'ADMIN',
     });
 
-    const token = signToken({ id: String(admin._id), role: admin.role, email: admin.email, name: admin.name });
+    const token = signToken({
+      id:           String(admin._id),
+      role:         admin.role,
+      email:        admin.email,
+      name:         admin.name,
+      tokenVersion: admin.tokenVersion ?? 0,
+    });
     setCookieToken(res, token);
 
     auditLogger({

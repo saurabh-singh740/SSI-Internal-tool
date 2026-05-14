@@ -9,6 +9,11 @@ export interface IUser extends Document {
   password: string;
   role: UserRole;
   phone?: string;
+  // Session revocation counter — incremented on logout and password change.
+  // JWTs carry the version at issue time; protect() rejects tokens whose
+  // version is less than the current DB value.  Existing tokens (pre-deploy,
+  // no version field) are treated as backward-compatible (version = undefined).
+  tokenVersion: number;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -21,6 +26,8 @@ const UserSchema = new Schema<IUser>(
     password: { type: String, required: true, minlength: 6 },
     role: { type: String, enum: ['ADMIN', 'ENGINEER', 'CUSTOMER'], default: 'ENGINEER' },
     phone: { type: String },
+    // Starts at 0; $inc to invalidate all issued tokens for this user
+    tokenVersion: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useRef, useReducer } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useReducer,
+  useCallback,
+  useMemo,
+} from 'react';
 import { User } from '../types';
 import api from '../api/axios';
 
@@ -66,27 +74,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initAuth();
   }, []); // empty array — must never gain dependencies; state changes must not re-trigger this
 
-  const login = async (email: string, password: string): Promise<User> => {
+  // useCallback ensures these functions have stable references across renders.
+  // Without this, every AuthContext state update (e.g. login sets user) creates
+  // new function objects, causing every consumer (Topbar, Sidebar, ProtectedRoute)
+  // to re-render even though the functions themselves haven't changed.
+  // dispatch from useReducer is guaranteed stable — safe as the only dep.
+
+  const login = useCallback(async (email: string, password: string): Promise<User> => {
     const res = await api.post('/auth/login', { email, password });
     const user: User = res.data.user;
     dispatch({ type: 'LOGIN', payload: user });
     return user;
-  };
+  }, []); // dispatch is stable — no deps needed
 
-  const logout = async () => {
+  const logout = useCallback(async (): Promise<void> => {
     await api.post('/auth/logout').catch(() => {});
     dispatch({ type: 'LOGOUT' });
-  };
+  }, []);
 
-  const registerAdmin = async (name: string, email: string, password: string): Promise<User> => {
-    const res = await api.post('/auth/register-admin', { name, email, password });
-    const user: User = res.data.user;
-    dispatch({ type: 'LOGIN', payload: user });
-    return user;
-  };
+  const registerAdmin = useCallback(
+    async (name: string, email: string, password: string): Promise<User> => {
+      const res = await api.post('/auth/register-admin', { name, email, password });
+      const user: User = res.data.user;
+      dispatch({ type: 'LOGIN', payload: user });
+      return user;
+    },
+    [],
+  );
+
+  // useMemo on the context value so the object reference only changes when
+  // state actually changes — not on every parent render.
+  const value = useMemo<AuthContextType>(
+    () => ({ ...state, login, logout, registerAdmin }),
+    [state, login, logout, registerAdmin],
+  );
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout, registerAdmin }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

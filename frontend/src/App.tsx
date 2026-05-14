@@ -4,6 +4,7 @@ import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { useAuth } from './context/AuthContext';
 import DashboardLayout from './components/layout/DashboardLayout';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Route-level code splitting — each page is a separate JS chunk downloaded
 // only when the user navigates to that route (reduces initial bundle ~70%).
@@ -29,6 +30,9 @@ const Partners                 = lazy(() => import('./pages/presales/Partners'))
 const ForgotPassword           = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword            = lazy(() => import('./pages/ResetPassword'));
 const AuditLogs                = lazy(() => import('./pages/AuditLogs'));
+const FeedbackPage             = lazy(() => import('./pages/Feedback'));
+const FeedbackForm             = lazy(() => import('./pages/FeedbackForm'));
+const MyFeedback               = lazy(() => import('./pages/MyFeedback'));
 
 // Minimal skeleton shown while a lazy chunk loads — prevents blank flash.
 function PageSkeleton() {
@@ -98,6 +102,9 @@ export default function App() {
   );
 
   return (
+    // Top-level ErrorBoundary: catches errors in routing, lazy chunk loading failures,
+    // and any component that doesn't have its own boundary.
+    <ErrorBoundary>
     <Suspense fallback={<PageSkeleton />}>
     <ToastContainer
       position="top-right"
@@ -139,7 +146,10 @@ export default function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <DashboardLayout />
+            {/* Per-layout ErrorBoundary: a broken page component won't take down the shell */}
+            <ErrorBoundary>
+              <DashboardLayout />
+            </ErrorBoundary>
           </ProtectedRoute>
         }
       >
@@ -174,6 +184,11 @@ export default function App() {
 
         {/* Audit Logs — admin only */}
         <Route path="audit-logs" element={<ProtectedRoute adminOnly><AuditLogs /></ProtectedRoute>} />
+
+        {/* Feedback */}
+        <Route path="feedback" element={<ProtectedRoute adminOnly><FeedbackPage /></ProtectedRoute>} />
+        <Route path="feedback/submit" element={<ProtectedRoute allowedRoles={['ADMIN','CUSTOMER','ENGINEER']}><FeedbackForm /></ProtectedRoute>} />
+        <Route path="feedback/my" element={<ProtectedRoute allowedRoles={['ADMIN','CUSTOMER','ENGINEER']}><MyFeedback /></ProtectedRoute>} />
 
         {/* Timesheets */}
         <Route path="timesheets" element={<Timesheets />} />
@@ -213,5 +228,6 @@ export default function App() {
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
     </Suspense>
+    </ErrorBoundary>
   );
 }

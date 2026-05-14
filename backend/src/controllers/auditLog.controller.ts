@@ -24,7 +24,7 @@
 
 import { Response }        from 'express';
 import mongoose            from 'mongoose';
-import AuditLog, { AuditModule, AuditSeverity } from '../models/AuditLog';
+import AuditLog, { AuditModule, AuditSeverity, RETENTION_DAYS } from '../models/AuditLog';
 import { AuthRequest }     from '../middleware/auth.middleware';
 import { safeError }       from '../utils/apiError';
 
@@ -51,7 +51,7 @@ function escapeRegex(s: string): string {
 // ── Validation sets ───────────────────────────────────────────────────────────
 
 const VALID_MODULES: AuditModule[] = [
-  'AUTH','USERS','PROJECTS','DEALS','TIMESHEETS','PAYMENTS','PARTNERS','SYSTEM',
+  'AUTH','USERS','PROJECTS','DEALS','TIMESHEETS','PAYMENTS','PARTNERS','FEEDBACK','SYSTEM',
 ];
 const VALID_SEVERITIES: AuditSeverity[] = ['LOW','MEDIUM','HIGH','CRITICAL'];
 
@@ -232,6 +232,73 @@ export const getAuditStats = async (_req: AuthRequest, res: Response): Promise<v
     });
   } catch (err) {
     console.error('[AuditLog] getAuditStats:', err);
+    res.status(500).json({ message: 'Server error', ...safeError(err) });
+  }
+};
+
+// ── GET /api/audit-logs/retention ─────────────────────────────────────────────
+// Returns the active retention policy plus live storage stats per severity.
+
+export const getRetentionPolicy = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const cap = parseInt(process.env.AUDIT_MAX_DOCS ?? '', 10) || 500_000;
+
+    const [total, bySeverity, expiryStats] = await Promise.all([
+      AuditLog.countDocuments(),
+      AuditLog.aggregate([
+        { $group: {
+          _id:        '$severity',
+          count:      { $sum: 1 },
+          withExpiry: { $sum: { $cond: [{ $ifNull: ['$expiresAt', false] }, 1, 0] } },
+          legacy:     { $sum: { $cond: [{ $not: [{ $ifNull: ['$expiresAt', false] }] }, 1, 0] } },
+        }},
+      ]),
+      AuditLog.aggregate([
+        { $match: { expiresAt: { $exists: true, $ne: null } } },
+        { $group: {
+          _id:            '$severity',
+          nextExpiry:     { $min: '$expiresAt' },
+          furthestExpiry: { $max: '$expiresAt' },
+        }},
+      ]),
+    ]);
+
+    const countMap: Record<string, { count: number; withExpiry: number; legacy: number }> = {};
+    for (const r of bySeverity) countMap[r._id] = r;
+
+    const expiryMap: Record<string, { nextExpiry: Date; furthestExpiry: Date }> = {};
+    for (const r of expiryStats) expiryMap[r._id] = r;
+
+    const severities: AuditSeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+
+    res.json({
+      policy: {
+        maxDocs:        cap,
+        retentionDays:  RETENTION_DAYS,
+        envOverrides: {
+          AUDIT_RETENTION_CRITICAL_DAYS: process.env.AUDIT_RETENTION_CRITICAL_DAYS ?? null,
+          AUDIT_RETENTION_HIGH_DAYS:     process.env.AUDIT_RETENTION_HIGH_DAYS     ?? null,
+          AUDIT_RETENTION_MEDIUM_DAYS:   process.env.AUDIT_RETENTION_MEDIUM_DAYS   ?? null,
+          AUDIT_RETENTION_LOW_DAYS:      process.env.AUDIT_RETENTION_LOW_DAYS      ?? null,
+          AUDIT_MAX_DOCS:                process.env.AUDIT_MAX_DOCS                ?? null,
+        },
+      },
+      stats: {
+        total,
+        capUtilisation: total > 0 ? Math.round((total / cap) * 100) : 0,
+        bySeverity: severities.map(sev => ({
+          severity:       sev,
+          retentionDays:  RETENTION_DAYS[sev],
+          count:          countMap[sev]?.count      ?? 0,
+          withExpiry:     countMap[sev]?.withExpiry  ?? 0,
+          legacy:         countMap[sev]?.legacy      ?? 0,
+          nextExpiry:     expiryMap[sev]?.nextExpiry     ?? null,
+          furthestExpiry: expiryMap[sev]?.furthestExpiry ?? null,
+        })),
+      },
+    });
+  } catch (err) {
+    console.error('[AuditLog] getRetentionPolicy:', err);
     res.status(500).json({ message: 'Server error', ...safeError(err) });
   }
 };

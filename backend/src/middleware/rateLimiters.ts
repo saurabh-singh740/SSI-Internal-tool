@@ -1,44 +1,61 @@
 import rateLimit, { Store } from 'express-rate-limit';
-import { AuthRequest } from './auth.middleware';
+import { getRedisClient }   from '../config/redis';
+import { AuthRequest }      from './auth.middleware';
 
 /**
- * Redis store for rate limiting — activates automatically when REDIS_URL is set.
+ * makeRedisStore — creates ONE fresh store instance per call.
  *
- * To enable (required for multi-instance / horizontal scaling):
- *   1. npm install rate-limit-redis ioredis
- *   2. Add REDIS_URL=redis://... to your environment
+ * WHY A FACTORY INSTEAD OF A SINGLETON:
+ *   express-rate-limit v7+ forbids sharing a single Store instance across multiple
+ *   rateLimit() calls (ERR_ERL_STORE_REUSE).  Each limiter needs its own store
+ *   so its key namespace and window counters remain isolated.
  *
- * Without REDIS_URL the limiters use the default in-memory store (single-instance only).
- * This function never throws — if Redis is misconfigured it falls back to memory silently.
+ *   We reuse the shared ioredis client (from config/redis.ts) — no extra connections.
+ *   The `prefix` parameter namespaces the Redis keys so each limiter's counters
+ *   don't collide (e.g. "rl:auth:" vs "rl:api:" vs "rl:write:").
+ *
+ * Falls back silently to undefined (in-memory store) when:
+ *   • REDIS_URL is not set
+ *   • rate-limit-redis is not installed
+ *   • Redis client is not yet ready
  */
-function buildRedisStore(): Store | undefined {
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) return undefined;
+function makeRedisStore(prefix: string): Store | undefined {
+  const client = getRedisClient();
+  if (!client) return undefined;
 
   try {
-    // Dynamic requires so the packages are optional — no crash if not installed
+    // Dynamic require — rate-limit-redis is an optional peer dependency.
+    // The app works without it (falls back to per-instance in-memory store).
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { RedisStore } = require('rate-limit-redis') as { RedisStore: new (opts: any) => Store };
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Redis = require('ioredis') as { new(url: string): any };
-    const client = new Redis(redisUrl);
-    console.log('[RateLimit] Redis store active — rate limiting is multi-instance safe');
-    return new RedisStore({ sendCommand: (...args: string[]) => client.call(...args) });
+    const { RedisStore } = require('rate-limit-redis') as {
+      RedisStore: new (opts: Record<string, unknown>) => Store;
+    };
+
+    const store = new RedisStore({
+      // Reuse the existing shared ioredis connection — no extra TCP connections
+      sendCommand: (...args: string[]) => (client as any).call(...args),
+      prefix,
+    });
+
+    console.log(`[RateLimit] Redis store active for prefix "${prefix}"`);
+    return store;
   } catch {
-    console.warn('[RateLimit] REDIS_URL set but rate-limit-redis/ioredis not installed — using memory store');
+    console.warn(
+      `[RateLimit] rate-limit-redis not installed for prefix "${prefix}" — using memory store. ` +
+      'Run: npm install rate-limit-redis',
+    );
     return undefined;
   }
 }
 
-const redisStore = buildRedisStore();
-
 // ── Auth rate limiter ─────────────────────────────────────────────────────────
 // Applied to POST /login, /register, /forgot-password, /reset-password.
-// Prevents brute-force credential attacks.
+// Prevents brute-force credential attacks and account enumeration.
 export const authRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 20 : 1000,
-  store: redisStore,
+  // Each limiter gets its own store instance — never share stores between limiters
+  store: makeRedisStore('rl:auth:'),
   standardHeaders: true,
   legacyHeaders:   false,
   message: { message: 'Too many attempts, please try again later.' },
@@ -50,7 +67,7 @@ export const authRateLimiter = rateLimit({
 export const apiRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
-  store: redisStore,
+  store: makeRedisStore('rl:api:'),
   standardHeaders: true,
   legacyHeaders:   false,
   message: { message: 'Too many requests, please slow down.' },
@@ -67,7 +84,7 @@ export const apiRateLimiter = rateLimit({
 export const perUserWriteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 30 : 1000,
-  store: redisStore,
+  store: makeRedisStore('rl:write:'),
   keyGenerator: (req) => {
     const authReq = req as AuthRequest;
     if (authReq.user?.id) return authReq.user.id;

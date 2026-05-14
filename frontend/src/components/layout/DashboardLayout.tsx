@@ -1,6 +1,6 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, Search, CheckCheck, Menu, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../context/AuthContext';
@@ -22,12 +22,15 @@ function NotificationBell() {
   const [open, setOpen]            = useState(false);
   const ref                        = useRef<HTMLDivElement>(null);
 
-  // Unread count — polls every 60 s, deduped across all component instances
+  // Unread count — polls every 5 minutes (reduced from 60 s).
+  // At 1000 concurrent users, 60 s polling = 1000 DB reads/minute.
+  // 5-minute interval reduces that by 5× with no perceptible UX impact —
+  // notifications are informational, not real-time critical.
   const { data: countData } = useQuery({
     queryKey: ['notifications-unread-count'],
     queryFn: () => api.get('/notifications/unread-count').then((r) => r.data.count ?? 0),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime:       60_000,   // serve cached count for up to 1 min before background re-fetch
+    refetchInterval: 300_000,  // poll every 5 minutes (was 60 s)
   });
   const count = countData ?? 0;
 
@@ -41,22 +44,23 @@ function NotificationBell() {
   const notifications: Notification[] = notifsData ?? [];
 
   const openPanel = () => setOpen(true);
+  void openPanel; // suppress unused-variable warning — kept for future direct callers
 
-  const markAllRead = async () => {
+  const markAllRead = useCallback(async () => {
     await api.patch('/notifications/read-all').catch(() => {});
     queryClient.setQueryData(['notifications-list'], (prev: Notification[] = []) =>
       prev.map((n) => ({ ...n, read: true }))
     );
     queryClient.setQueryData(['notifications-unread-count'], 0);
-  };
+  }, [queryClient]);
 
-  const markOneRead = async (id: string) => {
+  const markOneRead = useCallback(async (id: string) => {
     await api.patch(`/notifications/${id}/read`).catch(() => {});
     queryClient.setQueryData(['notifications-list'], (prev: Notification[] = []) =>
       prev.map((n) => (n._id === id ? { ...n, read: true } : n))
     );
     queryClient.setQueryData(['notifications-unread-count'], (c: number = 0) => Math.max(0, c - 1));
-  };
+  }, [queryClient]);
 
   // Close on outside click
   useEffect(() => {
@@ -302,8 +306,9 @@ function Topbar({ onMenuToggle, sidebarOpen }: TopbarProps) {
 }
 
 // ── Gradient background orbs ──────────────────────────────────────────────────
-
-function GradientBackground() {
+// memo: this is a pure static component with no props — it should NEVER re-render
+// after the initial mount.  Without memo it re-renders on every sidebarOpen toggle.
+const GradientBackground = memo(function GradientBackground() {
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
       <div className="absolute inset-0" style={{ background: '#050816' }} />
@@ -330,13 +335,32 @@ function GradientBackground() {
       />
     </div>
   );
-}
+});
+
+// ── Page content wrapper ──────────────────────────────────────────────────────
+// memo: the page content (Outlet) has NO dependency on sidebarOpen.
+// Without memo, every sidebar toggle re-renders the entire active page — all its
+// queries, tables, charts, and child components.  This wrapper breaks that coupling.
+// Navigation still works correctly: route changes cause React Router to update
+// Outlet regardless of this memo boundary.
+const PageContent = memo(function PageContent() {
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <Outlet />
+    </main>
+  );
+});
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location                      = useLocation();
+
+  // Stable callbacks — prevent Topbar and Sidebar from re-rendering due to
+  // new function references when sidebarOpen state changes.
+  const closeSidebar  = useCallback(() => setSidebarOpen(false), []);
+  const toggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
 
   // ── Auto-close on route change (tapping a nav link on mobile) ────────────
   useEffect(() => {
@@ -363,6 +387,7 @@ export default function DashboardLayout() {
 
   return (
     <div className="relative flex h-screen overflow-hidden">
+      {/* Pure static component — memo prevents re-render on sidebar toggle */}
       <GradientBackground />
 
       {/* ── Mobile backdrop ────────────────────────────────────────────────
@@ -376,7 +401,7 @@ export default function DashboardLayout() {
           transition-opacity duration-300
           ${sidebarOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}
         `}
-        onClick={() => setSidebarOpen(false)}
+        onClick={closeSidebar}
         aria-hidden="true"
       />
 
@@ -386,7 +411,7 @@ export default function DashboardLayout() {
           Desktop: always visible via lg:translate-x-0 in Sidebar.tsx.       */}
       <Sidebar
         open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        onClose={closeSidebar}
       />
 
       {/* ── Main content area ──────────────────────────────────────────────
@@ -396,12 +421,11 @@ export default function DashboardLayout() {
           transition-[margin] animates the shift when toggling on tablets.   */}
       <div className="flex flex-col flex-1 min-h-screen overflow-hidden lg:ml-64">
         <Topbar
-          onMenuToggle={() => setSidebarOpen((prev) => !prev)}
+          onMenuToggle={toggleSidebar}
           sidebarOpen={sidebarOpen}
         />
-        <main className="flex-1 overflow-y-auto">
-          <Outlet />
-        </main>
+        {/* PageContent is memoized — Outlet does NOT re-render when sidebarOpen changes */}
+        <PageContent />
       </div>
     </div>
   );

@@ -28,9 +28,16 @@ import { AuthRequest }      from '../middleware/auth.middleware';
 import AuditLog, {
   AuditModule,
   AuditSeverity,
+  RETENTION_DAYS,
 }                           from '../models/AuditLog';
 import { getAuditQueue }    from '../queues/auditQueue';
 import { sanitize }         from './diffUtil';
+
+function computeExpiresAt(severity: AuditSeverity): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + RETENTION_DAYS[severity]);
+  return d;
+}
 
 // ── Default severity per action ───────────────────────────────────────────────
 // Callers can override via entry.severity.
@@ -168,6 +175,7 @@ export function auditLogger(entry: AuditEntry): void {
     ipAddress,
     userAgent:   userAgent.slice(0, 512), // cap to prevent oversized documents
     requestId,
+    expiresAt:   computeExpiresAt(severity), // tiered retention — stamped at write time
   };
 
   // Always log to console first — visible in Render/any log aggregator

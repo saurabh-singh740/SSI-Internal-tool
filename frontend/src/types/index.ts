@@ -438,3 +438,68 @@ export interface DealAttachment {
   createdAt:    string;
   updatedAt:    string;
 }
+
+// ── Feedback ──────────────────────────────────────────────────────────────────
+
+export type FeedbackStatus    = 'PENDING' | 'SUBMITTED' | 'REVIEWED' | 'RESOLVED';
+export type FeedbackSentiment = 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE';
+
+export interface FeedbackRatings {
+  communication:   number;
+  delivery:        number;
+  quality:         number;
+  support:         number;
+  professionalism: number;
+  overall:         number;
+}
+
+export interface Feedback {
+  _id:              string;
+  feedbackNumber:   string;
+  project:          { _id: string; name: string; code: string; clientName?: string } | string;
+  engineer?:        User | string;
+  submittedBy:      User | string;
+  submitterName:    string;
+  submitterEmail:   string;
+  isAnonymous:      boolean;
+  period:           string;
+  status:           FeedbackStatus;
+  sentiment:        FeedbackSentiment;
+  ratings:          FeedbackRatings;
+  comment?:         string;
+  suggestion?:      string;
+  reviewedBy?:      User | string;
+  reviewNote?:      string;
+  resolvedAt?:      string;
+  followUpRequired: boolean;
+  tags:             string[];
+  createdAt:        string;
+  updatedAt:        string;
+}
+
+export interface FeedbackNPS {
+  nps:        number;
+  promoters:  number;
+  passives:   number;
+  detractors: number;
+  total:      number;
+}
+
+export interface FeedbackStats {
+  total:         number;
+  avgRatings:    Partial<Record<string, number>>;
+  trend:         { _id: { year: number; month: number }; count: number; avgOverall: number }[];
+  distribution:  { _id: number; count: number }[];
+  byStatus:      Partial<Record<FeedbackStatus, number>>;
+  topProjects:   { _id: string; projectName: string; count: number; avgOverall: number }[];
+  nps:           FeedbackNPS;
+  sentiment:     Partial<Record<FeedbackSentiment, number>>;
+  followUpCount: number;
+}
+
+export interface MyFeedbackSummary {
+  total:      number;
+  avgOverall: number;
+  pending:    number;
+  resolved:   number;
+}

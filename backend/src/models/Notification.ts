@@ -5,7 +5,8 @@ export type NotificationType =
   | 'HOURS_THRESHOLD_EXCEEDED'
   | 'PAYMENT_RECORDED'
   | 'ENGINEER_ASSIGNED'
-  | 'PROJECT_CLOSED';
+  | 'PROJECT_CLOSED'
+  | 'FEEDBACK_SUBMITTED';
 
 export interface INotification extends Document {
   user: mongoose.Types.ObjectId;
@@ -28,6 +29,7 @@ const NotificationSchema = new Schema<INotification>(
         'PAYMENT_RECORDED',
         'ENGINEER_ASSIGNED',
         'PROJECT_CLOSED',
+        'FEEDBACK_SUBMITTED',
       ],
       required: true,
     },

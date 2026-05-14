@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban, Users, LogOut,
   ChevronRight, Clock, BarChart2, DollarSign, X,
-  TrendingUp, Building2, Shield,
+  TrendingUp, Building2, Shield, MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { clsx } from 'clsx';
@@ -20,19 +20,24 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/payments',        label: 'Payments',   icon: DollarSign },
   { to: '/partners',        label: 'Partners',   icon: Building2 },
   { to: '/users',           label: 'Users',      icon: Users },
+  { to: '/feedback',        label: 'Feedback',   icon: MessageSquare },
   { to: '/audit-logs',     label: 'Audit Logs', icon: Shield },
 ];
 
 const ENGINEER_NAV: NavItem[] = [
-  { to: '/engineer/dashboard', label: 'Dashboard',    icon: LayoutDashboard },
-  { to: '/projects',           label: 'My Projects',  icon: FolderKanban },
-  { to: '/timesheets',         label: 'Timesheets',   icon: Clock },
-  { to: '/work-summary',       label: 'Work Summary', icon: BarChart2 },
+  { to: '/engineer/dashboard', label: 'Dashboard',       icon: LayoutDashboard },
+  { to: '/projects',           label: 'My Projects',     icon: FolderKanban },
+  { to: '/timesheets',         label: 'Timesheets',      icon: Clock },
+  { to: '/work-summary',       label: 'Work Summary',    icon: BarChart2 },
+  { to: '/feedback/my',        label: 'My Feedback',     icon: MessageSquare },
+  { to: '/feedback/submit',    label: 'Submit Feedback', icon: MessageSquare },
 ];
 
 const CUSTOMER_NAV: NavItem[] = [
   { to: '/projects',         label: 'Projects',        icon: FolderKanban },
   { to: '/payments/history', label: 'Payment History', icon: DollarSign },
+  { to: '/feedback/my',      label: 'My Feedback',     icon: MessageSquare },
+  { to: '/feedback/submit',  label: 'Submit Feedback', icon: MessageSquare },
 ];
 
 function getNav(role?: string): NavItem[] {

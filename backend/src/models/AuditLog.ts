@@ -1,9 +1,16 @@
 /**
  * AuditLog — immutable, append-only record of every privileged mutation.
  *
- * Design:
- *  • updatedAt is intentionally omitted — logs are never mutated.
- *  • TTL index auto-purges records older than 2 years (730 days).
+ * Retention strategy (tiered by severity):
+ *  • Each document gets an `expiresAt` field stamped at write time.
+ *  • A TTL index on `expiresAt` (expireAfterSeconds: 0) handles automatic expiry.
+ *  • Defaults (override via env vars):
+ *      CRITICAL  → AUDIT_RETENTION_CRITICAL_DAYS  (default 1825 = 5 years)
+ *      HIGH      → AUDIT_RETENTION_HIGH_DAYS       (default  730 = 2 years)
+ *      MEDIUM    → AUDIT_RETENTION_MEDIUM_DAYS     (default  365 = 1 year)
+ *      LOW       → AUDIT_RETENTION_LOW_DAYS        (default   90 days)
+ *  • The auditRetentionScheduler runs weekly to clean legacy docs (no expiresAt)
+ *    and enforce a hard cap (AUDIT_MAX_DOCS, default 500 000).
  *  • All writes go through auditLogger.ts — never call AuditLog.create() directly.
  *  • actorId is optional so failed-login events (unknown user) can be recorded.
  */
@@ -19,9 +26,24 @@ export type AuditModule =
   | 'TIMESHEETS'
   | 'PAYMENTS'
   | 'PARTNERS'
+  | 'FEEDBACK'
   | 'SYSTEM';
 
 export type AuditSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+// ── Retention policy ──────────────────────────────────────────────────────────
+
+function _retentionDays(envKey: string, fallback: number): number {
+  const v = parseInt(process.env[envKey] ?? '', 10);
+  return isNaN(v) || v < 1 ? fallback : v;
+}
+
+export const RETENTION_DAYS: Record<AuditSeverity, number> = {
+  CRITICAL: _retentionDays('AUDIT_RETENTION_CRITICAL_DAYS', 5 * 365),
+  HIGH:     _retentionDays('AUDIT_RETENTION_HIGH_DAYS',     2 * 365),
+  MEDIUM:   _retentionDays('AUDIT_RETENTION_MEDIUM_DAYS',   365),
+  LOW:      _retentionDays('AUDIT_RETENTION_LOW_DAYS',      90),
+};
 
 // ── Interface ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +75,9 @@ export interface IAuditLog extends Document {
   userAgent?:   string;
   requestId?:   string;
 
+  // Tiered retention — stamped at write time; TTL index removes doc when now >= expiresAt
+  expiresAt:    Date;
+
   createdAt:    Date;
 }
 
@@ -64,7 +89,7 @@ const AuditLogSchema = new Schema<IAuditLog>(
     module:       {
       type:     String,
       required: true,
-      enum:     ['AUTH','USERS','PROJECTS','DEALS','TIMESHEETS','PAYMENTS','PARTNERS','SYSTEM'],
+      enum:     ['AUTH','USERS','PROJECTS','DEALS','TIMESHEETS','PAYMENTS','PARTNERS','FEEDBACK','SYSTEM'],
     },
     severity: {
       type:    String,
@@ -88,6 +113,8 @@ const AuditLogSchema = new Schema<IAuditLog>(
     ipAddress:    { type: String },
     userAgent:    { type: String },
     requestId:    { type: String },
+
+    expiresAt: { type: Date, required: true },
   },
   {
     // Append-only: only createdAt, no updatedAt
@@ -121,9 +148,14 @@ AuditLogSchema.index({ action: 1, createdAt: -1 });
 // Compound: module + severity — "HIGH events in PAYMENTS"
 AuditLogSchema.index({ module: 1, severity: 1, createdAt: -1 });
 
-// TTL: auto-purge records older than 730 days (2 years)
-// ⚠  To increase retention: change expireAfterSeconds here + run collMod in MongoDB
-AuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 730 * 24 * 60 * 60 });
+// Per-document TTL — MongoDB removes doc when now >= expiresAt.
+// expireAfterSeconds: 0 means "expire exactly at the stored date/time".
+// Retention windows are stamped into expiresAt at write time (see auditLogger.ts).
+// Legacy docs without expiresAt are handled by auditRetentionScheduler.ts.
+AuditLogSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Retention admin queries — "show me docs expiring in the next 30 days"
+AuditLogSchema.index({ severity: 1, expiresAt: 1 });
 
 // ── Block mutations at the model level ────────────────────────────────────────
 // These hooks make it impossible to accidentally call AuditLog.updateOne() etc.

@@ -27,6 +27,7 @@ import paymentRoutes      from './routes/payment.routes';
 import dealRoutes         from './modules/presales/routes/deal.routes';
 import partnerRoutes      from './modules/presales/routes/partner.routes';
 import attachmentRoutes   from './modules/presales/routes/attachment.routes';
+import feedbackRoutes     from './routes/feedback.routes';
 import { testEmail }      from './controllers/engineer.controller';
 import { protect, requireRole } from './middleware/auth.middleware';
 import { globalErrorHandler }   from './middleware/errorHandler';
@@ -39,10 +40,28 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ── Security headers ──────────────────────────────────────────────────────────
-// contentSecurityPolicy is disabled so Vite's hashed module scripts load
-// without "Refused to execute inline script" errors.
+// CSP is now ENABLED.  Policy notes for this React SPA:
+//   • script-src 'self'           — all JS comes from /assets/ (Vite hashed files), no eval/inline
+//   • style-src  'self' 'unsafe-inline' — React renders inline style={{}} props which translate
+//                                         to HTML style attributes; these require 'unsafe-inline'
+//   • img-src    'self' data:     — data: URIs used for logo / inline images
+//   • connect-src 'self'          — XHR/fetch goes to the same origin (/api/*)
+//   • frame-ancestors 'none'      — prevents clickjacking (replaces X-Frame-Options)
+//   • object-src  'none'          — blocks Flash and other plugin content
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:      ["'self'"],
+      scriptSrc:       ["'self'"],
+      styleSrc:        ["'self'", "'unsafe-inline'"],
+      imgSrc:          ["'self'", 'data:'],
+      connectSrc:      ["'self'"],
+      fontSrc:         ["'self'"],
+      objectSrc:       ["'none'"],
+      mediaSrc:        ["'none'"],
+      frameAncestors:  ["'none'"],
+    },
+  },
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
@@ -132,6 +151,7 @@ app.use('/api/deals',                  dealRoutes);
 app.use('/api/deals/:id/attachments',  attachmentRoutes);
 app.use('/api/partners',               partnerRoutes);
 app.use('/api/audit-logs',             auditLogRoutes);
+app.use('/api/feedback',               feedbackRoutes);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -161,12 +181,14 @@ app.use('/api', (_req: Request, res: Response) => {
 
 
 
-// Debug — visible in Render Logs tab to confirm paths at runtime
-console.log('[static] cwd        :', process.cwd());
-console.log('[static] __dirname  :', __dirname);
-console.log('[static] PUBLIC_DIR :', __dirname, '../public');
-console.log('[static] dir exists :', fs.existsSync(path.join(__dirname, '../public')));
-console.log('[static] index.html :', fs.existsSync(path.join(__dirname, '../public/index.html')));
+// Static path diagnostics — development only so production logs stay clean.
+// In production, log the key facts at info level once at startup (not per-request).
+if (process.env.NODE_ENV !== 'production') {
+  console.log('[static] cwd        :', process.cwd());
+  console.log('[static] __dirname  :', __dirname);
+  console.log('[static] dir exists :', fs.existsSync(path.join(__dirname, '../public')));
+  console.log('[static] index.html :', fs.existsSync(path.join(__dirname, '../public/index.html')));
+}
 
 // Vite emits all JS/CSS/image assets into /assets/ with content-hash filenames.
 // These can be cached forever — if the content changes the filename changes too.
